@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/auth"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/botaccess"
 )
 
 type PGRepository struct {
@@ -456,22 +457,64 @@ const memberSelect = `SELECT
 		)
 		OR EXISTS (SELECT 1 FROM member_visibility_grants g WHERE g.space_id = $1 AND g.viewer_user_id = $2 AND g.visible_user_id = u.id)
 		OR u.id = ANY($3::text[])
-	) AS normally_visible
+	) AS normally_visible,
+	b_meta.id, b_meta.space_id, b_meta.owner_user_id, b_meta.bot_user_id, b_meta.status,
+	COALESCE(bs_meta.visibility_policy, b_meta.visibility_policy, 'private'),
+	COALESCE(bs_meta.allow_direct = 1, TRUE),
+	COALESCE(bs_meta.allow_group = 1, FALSE),
+	bs_meta.access_policy
 FROM users u
 INNER JOIN space_members sm ON sm.user_id = u.id
 LEFT JOIN user_remarks ur ON ur.owner_user_id = $2 AND ur.target_user_id = u.id
+LEFT JOIN workspace_agent_bots b_meta ON b_meta.space_id = sm.space_id AND b_meta.bot_user_id = u.id AND b_meta.status <> 'deleted'
+LEFT JOIN workspace_agent_bot_settings bs_meta ON bs_meta.bot_id = b_meta.id AND bs_meta.space_id = sm.space_id
 `
 
 func scanMemberRecord(row interface{ Scan(...any) error }) (MemberRecord, error) {
 	var record MemberRecord
 	var nickname, remark, avatarURL, recallReason *string
-	if err := row.Scan(&record.ID, &record.GitHubLogin, &record.DisplayName, &nickname, &remark, &avatarURL, &record.SearchDiscoverable, &recallReason, &record.Kind, &record.Role, &record.JoinedAt, &record.NormallyVisible); err != nil {
+	var botID, botSpaceID, botOwnerID, botUserID, botStatus, botVisibility *string
+	var botAllowDirect, botAllowGroup *bool
+	var rawAccessPolicy []byte
+	if err := row.Scan(&record.ID, &record.GitHubLogin, &record.DisplayName, &nickname, &remark, &avatarURL, &record.SearchDiscoverable, &recallReason, &record.Kind, &record.Role, &record.JoinedAt, &record.NormallyVisible,
+		&botID, &botSpaceID, &botOwnerID, &botUserID, &botStatus, &botVisibility, &botAllowDirect, &botAllowGroup, &rawAccessPolicy); err != nil {
 		return MemberRecord{}, err
 	}
 	record.Nickname = nickname
 	record.Remark = remark
 	record.AvatarURL = stringValue(avatarURL)
 	record.RecallReason = recallReason
+	if botID != nil && strings.TrimSpace(*botID) != "" {
+		allowDirect, allowGroup := true, false
+		if botAllowDirect != nil {
+			allowDirect = *botAllowDirect
+		}
+		if botAllowGroup != nil {
+			allowGroup = *botAllowGroup
+		}
+		visibility := "private"
+		if botVisibility != nil {
+			visibility = *botVisibility
+		}
+		spaceID, ownerID, botUID, status := "", "", "", ""
+		if botSpaceID != nil {
+			spaceID = *botSpaceID
+		}
+		if botOwnerID != nil {
+			ownerID = *botOwnerID
+		}
+		if botUserID != nil {
+			botUID = *botUserID
+		}
+		if botStatus != nil {
+			status = *botStatus
+		}
+		access, accessErr := botaccess.NewRecord(*botID, spaceID, ownerID, botUID, status, visibility, allowDirect, allowGroup, rawAccessPolicy)
+		if accessErr != nil {
+			return MemberRecord{}, accessErr
+		}
+		record.BotAccess = &access
+	}
 	return record, nil
 }
 

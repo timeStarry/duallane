@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { inferMimeTypeFromFileName } from "./index.js";
 import { decodeArtifactBase64 } from "./base64.js";
+import { buildMessageContent } from "./message-content.js";
 
 export const AGENT_BRIDGE_PROTOCOL_VERSION = 1;
 export const AGENT_MAX_RESULT_BYTES = 70 * 1024 * 1024;
@@ -31,7 +32,7 @@ function bridgeHumanMessage(message) {
   return message && ["human", "user"].includes(message.authorKind || message.senderKind || message.kind);
 }
 
-export function resolveAgentTrigger(event, context) {
+export function resolveAgentTrigger(event, context, authorization) {
   const payload = event?.payload || {};
   if (event?.type === "command.invoked") {
     if (payload.argsComplete === false) throw new AgentRuntimeError("input.trigger_truncated");
@@ -45,7 +46,9 @@ export function resolveAgentTrigger(event, context) {
     if (!message && payload.textComplete === true && typeof payload.text === "string") {
       return { id: explicitId, authorKind: "human", plainText: payload.text };
     }
-    if (!message || ["bot", "system"].includes(message.authorKind || message.kind)) {
+    const kind = message?.authorKind || message?.kind;
+    const trustedBotTrigger = kind === "bot" && authorization?.triggerMessageId === explicitId && authorization?.conversationId === event.conversationId;
+    if (!message || kind === "system" || (kind === "bot" && !trustedBotTrigger)) {
       throw new AgentRuntimeError("input.trigger_unavailable");
     }
     return structuredClone(message);
@@ -58,11 +61,11 @@ export function resolveAgentTrigger(event, context) {
   return structuredClone(human);
 }
 
-export function buildAgentBridgeRequest({ taskId, event, context, conversation, capabilities = {}, inputs = [], artifacts = [] }) {
+export function buildAgentBridgeRequest({ taskId, event, context, conversation, capabilities = {}, inputs = [], artifacts = [], authorization }) {
   if (!conversation?.id || conversation.id !== event?.conversationId) {
     throw new AgentRuntimeError("input.conversation_mismatch");
   }
-  const triggerMessage = resolveAgentTrigger(event, context);
+  const triggerMessage = resolveAgentTrigger(event, context, authorization);
   return {
     protocol: "duallane.agent.request",
     version: AGENT_BRIDGE_PROTOCOL_VERSION,
@@ -124,7 +127,10 @@ export function parseAgentBridgeResult(raw, { taskId, validateBytes } = {}) {
   if (result.protocol !== "duallane.agent.result" || result.version !== 1) throw new AgentRuntimeError("bridge.protocol_unsupported");
   if (result.taskId !== undefined && result.taskId !== taskId) throw new AgentRuntimeError("bridge.task_mismatch");
   if (result.status !== "completed") throw new AgentRuntimeError(result.status === "cancelled" ? "bridge.cancelled" : "bridge.incomplete");
+  const content = result.content === undefined ? undefined : buildMessageContent(result.content);
+  if (result.text === undefined && content) result.text = content.plainText;
   if (typeof result.text !== "string" || result.text.length > 28_000) throw new AgentRuntimeError("bridge.invalid_text");
+  if (result.artifacts === undefined) result.artifacts = [];
   if (!Array.isArray(result.artifacts) || result.artifacts.length > 6) throw new AgentRuntimeError("artifact.count_limit");
   const seen = new Set(); let totalBytes = 0;
   const artifacts = result.artifacts.map((artifact) => {
@@ -154,5 +160,5 @@ export function parseAgentBridgeResult(raw, { taskId, validateBytes } = {}) {
     return { id: artifact.id, source: "inline", fileName, mimeType, bytes, sha256 };
   });
   if (!result.text.trim() && !artifacts.length) throw new AgentRuntimeError("bridge.empty_result");
-  return { text: result.text.trim(), artifacts };
+  return { text: result.text.trim(), artifacts, ...(content ? { content } : {}) };
 }

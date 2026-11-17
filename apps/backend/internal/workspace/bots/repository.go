@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/auth"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/botpolicy"
 )
 
 // ReadRepository is deliberately limited to Bot-owned projections and the
@@ -35,6 +36,13 @@ type ReadRepository interface {
 // commit or roll back together without exposing generic SQL.
 type ConnectionTransaction interface {
 	ClearConnectionErrors(ctx context.Context, botID, spaceID string, at time.Time) (*ConnectionRecord, error)
+}
+
+// AccessPolicyTransaction is optional for legacy adapters during the additive
+// schema rollout. PostgreSQL implements it; older test/adaptor transactions
+// retain NULL (legacy mode) until they adopt the access_policy column.
+type AccessPolicyTransaction interface {
+	UpdateAccessPolicy(ctx context.Context, spaceID, botID string, policy *botpolicy.Policy, at time.Time) error
 }
 
 type Repository interface {

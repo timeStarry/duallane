@@ -268,7 +268,7 @@ export async function restartInstalledDaemons({ configDir, quiet = true } = {}) 
   return restarted;
 }
 
-export async function invokeDaemonAgentTurn({ customCmd, workdir, request, signal, timeoutMs = 300_000 }) {
+export async function invokeDaemonAgentTurn({ customCmd, workdir, request, signal, toolEnvironment, timeoutMs = 300_000 }) {
   if (!customCmd) throw new TypeError("Resident daemons require --cmd <command>; no agent executable is selected automatically.");
   const input = JSON.stringify(request);
   if (Buffer.byteLength(input) > 16 * 1024 * 1024) throw new AgentRuntimeError("bridge.input_limit");
@@ -278,6 +278,12 @@ export async function invokeDaemonAgentTurn({ customCmd, workdir, request, signa
     delete env.DUALLANE_BOT_TOKEN;
     delete env.DUALLANE_TOKEN;
     delete env.DUALLANE_MESSAGE_TEXT;
+    delete env.DUALLANE_TASK_BROKER_URL;
+    delete env.DUALLANE_TASK_BROKER_KEY;
+    if (toolEnvironment) {
+      env.DUALLANE_TASK_BROKER_URL = toolEnvironment.DUALLANE_TASK_BROKER_URL;
+      env.DUALLANE_TASK_BROKER_KEY = toolEnvironment.DUALLANE_TASK_BROKER_KEY;
+    }
     env.DUALLANE_CONVERSATION_ID = String(request.event.conversationId);
     env.DUALLANE_EVENT_TYPE = String(request.event.type || "");
     const child = spawn(customCmd, { cwd: workdir, shell: true, windowsHide: true,
@@ -382,7 +388,7 @@ export async function runResidentDaemon(flags = {}) {
     prepareInputs: prepareAgentInputs,
     validateBytes: validateArtifactBytes,
     resolveMedia: createDaemonMediaResolver({ enabled: allowPublicMedia, dnsServers: mediaDnsServers }),
-    invoke: (request, { signal }) => invokeDaemonAgentTurn({ customCmd, workdir, request, signal }),
+    invoke: (request, { signal, toolEnvironment }) => invokeDaemonAgentTurn({ customCmd, workdir, request, signal, toolEnvironment }),
     onState(summary) {
       updateRecord({ taskSummary: summary });
       if (pendingRestart && summary.pending === 0 && summary.active === 0) void shutdown();

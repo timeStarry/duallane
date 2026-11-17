@@ -17,6 +17,10 @@ import {
   REVIEWED_COMPATIBLE_MIGRATION_SHA256,
   REVIEWED_MOBILE_MIGRATION,
   REVIEWED_MOBILE_MIGRATION_SHA256,
+  REVIEWED_V1_MIGRATION,
+  REVIEWED_V1_MIGRATION_SHA256,
+  REVIEWED_AGENT_MIGRATION,
+  REVIEWED_AGENT_MIGRATION_SHA256,
   SCHEMA_COMPATIBILITY_LABEL,
   SCHEMA_COMPATIBILITY_USER,
   SCHEMA_INSPECTION_SCRIPT,
@@ -67,6 +71,26 @@ function mobileBridgePolicy() {
 
 function mobileMigrations() {
   return [...reviewedMigrations(true), { name: REVIEWED_MOBILE_MIGRATION, sha256: REVIEWED_MOBILE_MIGRATION_SHA256 }];
+}
+
+function v1BridgePolicy() {
+  const result = mobileBridgePolicy();
+  result.compatibleMigrations.push({ name: REVIEWED_V1_MIGRATION, sha256: REVIEWED_V1_MIGRATION_SHA256 });
+  return result;
+}
+
+function v1Migrations() {
+  return [...mobileMigrations(), { name: REVIEWED_V1_MIGRATION, sha256: REVIEWED_V1_MIGRATION_SHA256 }];
+}
+
+function agentBridgePolicy() {
+  const result = v1BridgePolicy();
+  result.compatibleMigrations.push({ name: REVIEWED_AGENT_MIGRATION, sha256: REVIEWED_AGENT_MIGRATION_SHA256 });
+  return result;
+}
+
+function agentMigrations() {
+  return [...v1Migrations(), { name: REVIEWED_AGENT_MIGRATION, sha256: REVIEWED_AGENT_MIGRATION_SHA256 }];
 }
 
 function reviewedMigrations(includeCompatible = false, compatibleHash = REVIEWED_COMPATIBLE_MIGRATION_SHA256) {
@@ -288,6 +312,36 @@ test("mobile bridge declarations reject changed, renamed, reordered and future a
   }
   const future = inventory([...mobileMigrations(), migration(36, "future", hash("e"))], mobileBridgePolicy());
   expectCode(() => compareSchemaInventories(bridge, future), "target_policy_inventory_mismatch");
+});
+
+test("schema 36 bridge authorizes only the exact reviewed 036-to-037 expansion", () => {
+  const bridge = inventory(v1Migrations(), agentBridgePolicy());
+  const target = inventory(agentMigrations(), agentBridgePolicy());
+  const result = compareSchemaInventories(bridge, target);
+  assert.equal(result.status, "compatible");
+  assert.equal(result.previousMigrationCount, 36);
+  assert.equal(result.targetMigrationCount, 37);
+  assert.equal(result.commonMigrationCount, 36);
+  assert.equal(result.addedMigrationCount, 1);
+  assert.equal(result.policyUsed, true);
+});
+
+test("an old schema 36 policy without the 037 declaration rejects schema 37", () => {
+  const oldSchema36 = inventory(v1Migrations(), v1BridgePolicy());
+  const target = inventory(agentMigrations(), agentBridgePolicy());
+  expectCode(() => compareSchemaInventories(oldSchema36, target), "migration_not_authorized");
+});
+
+test("037 rejects a tampered hash and a policy that omits schema 36", () => {
+  const bridge = inventory(v1Migrations(), agentBridgePolicy());
+  const target = inventory(agentMigrations(), agentBridgePolicy());
+
+  const tamperedTarget = structuredClone(target);
+  tamperedTarget.migrations.at(-1).sha256 = hash("f");
+  expectCode(() => compareSchemaInventories(bridge, tamperedTarget), "target_policy_hash_mismatch");
+
+  const missing36 = inventory(mobileMigrations(), agentBridgePolicy());
+  expectCode(() => compareSchemaInventories(bridge, missing36), "target_policy_agent_baseline_missing");
 });
 
 test("exact-image inspection preserves the 034 bridge and 035 prior-policy boundary", async () => {

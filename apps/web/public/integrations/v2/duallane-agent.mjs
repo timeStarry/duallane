@@ -481,8 +481,449 @@ export function readBoundedFile(filePath) {
   }
 }
 
+// --- src/message-content.js ---
+export const AGENT_MESSAGE_FORMAT = "duallane.message+json;v=1";
+const MESSAGE_REFERENCE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
+const MESSAGE_BLOCK_FIELDS = Object.freeze({
+  text: ["text"], mention: ["userId", "label"], link: ["url", "label"],
+  attachment: ["attachmentId"], emoji: ["shortcode"],
+  emote_collection: ["shareId"], topic_reference: ["topicId", "title"], card: ["cardId", "cardType", "schemaVersion", "fallbackText"],
+});
+
+function messageInvalid(code = "message.invalid_content") {
+  return Object.assign(new TypeError("Invalid structured DualLane message"), { code });
+}
+
+function messageReference(value) {
+  if (typeof value !== "string" || !MESSAGE_REFERENCE_ID.test(value)) throw messageInvalid("message.invalid_reference");
+  return value;
+}
+
+export function messageText(text) {
+  if (typeof text !== "string" || !text || text.length > 30_000) throw messageInvalid();
+  return { type: "text", text };
+}
+
+export function messageMention(userId, label = "") {
+  if (typeof label !== "string" || label.length > 180) throw messageInvalid();
+  return { type: "mention", userId: messageReference(userId), label };
+}
+
+export function messageAttachment(attachmentId) {
+  return { type: "attachment", attachmentId: messageReference(attachmentId) };
+}
+
+export function messageLink(url, label = "") {
+  let parsed;
+  try { parsed = new URL(url); } catch { throw messageInvalid("message.invalid_link"); }
+  if (!["https:", "http:"].includes(parsed.protocol) || parsed.username || parsed.password || String(url).length > 4096 || typeof label !== "string" || label.length > 1000) throw messageInvalid("message.invalid_link");
+  return { type: "link", url: parsed.href, label };
+}
+
+function normalizeMessageBlock(block) {
+  if (!block || typeof block !== "object" || Array.isArray(block)) throw messageInvalid();
+  switch (block.type) {
+    case "text": return messageText(block.text);
+    case "mention": return messageMention(block.userId, block.label);
+    case "attachment": return messageAttachment(block.attachmentId);
+    case "link": return messageLink(block.url, block.label);
+    case "emoji":
+      if (typeof block.shortcode !== "string" || !/^(?:[a-z0-9_+\-]{1,64}|custom:[A-Za-z0-9._:-]{1,128})$/u.test(block.shortcode)) throw messageInvalid();
+      return { type: "emoji", shortcode: block.shortcode };
+    case "emote_collection": return { type: "emote_collection", shareId: messageReference(block.shareId) };
+    case "topic_reference":
+      if (typeof block.title !== "string" || block.title.length > 300) throw messageInvalid();
+      return { type: "topic_reference", topicId: messageReference(block.topicId), title: block.title };
+    case "card":
+      if (typeof block.cardType !== "string" || block.cardType.length > 100 || !Number.isSafeInteger(block.schemaVersion) || block.schemaVersion < 1 || typeof block.fallbackText !== "string" || block.fallbackText.length > 3000) throw messageInvalid();
+      return { type: "card", cardId: messageReference(block.cardId), cardType: block.cardType, schemaVersion: block.schemaVersion, fallbackText: block.fallbackText };
+    default: throw messageInvalid("message.unsupported_block");
+  }
+}
+
+function messageBlockFallback(block) {
+  switch (block.type) {
+    case "text": return block.text;
+    case "mention": return `@${block.label || block.userId}`;
+    case "link": return block.label || block.url;
+    case "attachment": return "[附件]";
+    case "emoji": return `:${block.shortcode}:`;
+    case "emote_collection": return "[表情合集]";
+    case "topic_reference": return block.title;
+    case "card": return block.fallbackText;
+    default: return "[不支持的消息内容]";
+  }
+}
+
+/** Canonical outbound representation; the server still validates IDs and ACLs. */
+export function buildMessageContent(input) {
+  const blocks = Array.isArray(input) ? input : input?.blocks;
+  if (!Array.isArray(blocks) || blocks.length < 1 || blocks.length > 100 || (input?.format !== undefined && input.format !== AGENT_MESSAGE_FORMAT)) throw messageInvalid();
+  const normalized = blocks.map(normalizeMessageBlock);
+  const plainText = normalized.map(messageBlockFallback).join("");
+  if (plainText.length > 30_000 || Buffer.byteLength(JSON.stringify(normalized)) > 128 * 1024) throw messageInvalid("message.content_limit");
+  return { format: AGENT_MESSAGE_FORMAT, blocks: normalized, plainText };
+}
+
+/** Unknown read blocks remain visible as unsupported; never silently re-send them. */
+export function parseMessageContent(input) {
+  if (!input || input.format !== AGENT_MESSAGE_FORMAT || !Array.isArray(input.blocks) || input.blocks.length > 100) throw messageInvalid();
+  const unsupportedBlockTypes = [];
+  const blocks = input.blocks.map((block) => {
+    if (!Object.hasOwn(MESSAGE_BLOCK_FIELDS, block?.type)) {
+      const originalType = typeof block?.type === "string" ? block.type.slice(0, 64) : "unknown";
+      unsupportedBlockTypes.push(originalType);
+      return { type: "unsupported", originalType };
+    }
+    return normalizeMessageBlock(block);
+  });
+  return { format: AGENT_MESSAGE_FORMAT, blocks,
+    plainText: typeof input.plainText === "string" ? input.plainText.slice(0, 30_000) : blocks.map(messageBlockFallback).join(""),
+    unsupportedBlockTypes, complete: unsupportedBlockTypes.length === 0 };
+}
+
+export const AGENT_MESSAGE_CONTENT_SCHEMA = Object.freeze({
+  type: "object", additionalProperties: false,
+  properties: { format: { const: AGENT_MESSAGE_FORMAT }, plainText: { type: "string", maxLength: 30_000, description: "Optional display fallback; the server canonicalizes it." },
+    blocks: { type: "array", minItems: 1, maxItems: 100,
+      items: { oneOf: Object.entries(MESSAGE_BLOCK_FIELDS).map(([type, fields]) => ({
+        type: "object", additionalProperties: false,
+        properties: { type: { const: type }, ...Object.fromEntries(fields.map((field) => [field,
+          field === "schemaVersion" ? { type: "integer", minimum: 1 }
+            : { type: "string", ...(field.endsWith("Id") ? { pattern: MESSAGE_REFERENCE_ID.source, maxLength: 128 } : { maxLength: field === "text" ? 30_000 : field === "url" ? 4096 : 3000 }) }])) },
+        required: ["type", ...fields.filter((field) => field !== "label")],
+      })) } } },
+  required: ["format", "blocks"],
+});
+
+// --- src/task-client.js ---
+const SCOPED_TASK_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
+
+function scopedTaskError(code) {
+  return Object.assign(new Error("DualLane task operation is unavailable"), { name: "DualLaneAgentError", code, retryable: false });
+}
+
+function scopedTaskExpiry(value) {
+  const time = typeof value === "number" ? value : Date.parse(value);
+  if (!Number.isFinite(time)) throw scopedTaskError("task.invalid_context");
+  return time;
+}
+
+/** A task is a revocable server grant, never a replacement for the Bot credential. */
+export function createTaskScopedClient(client, task, options = {}) {
+  if (!task || !SCOPED_TASK_ID.test(task.id || "") || !SCOPED_TASK_ID.test(task.conversationId || "") || typeof client.getTask !== "function") throw scopedTaskError("task.invalid_context");
+  const initial = { id: task.id, conversationId: task.conversationId, triggerMessageId: task.triggerMessageId, expiresAt: scopedTaskExpiry(task.expiresAt) };
+  const now = options.now ?? Date.now;
+  const limit = (value, fallback, max) => Number.isSafeInteger(value) && value > 0 ? Math.min(value, max) : fallback;
+  const maxCalls = limit(options.maxCalls, 32, 128);
+  const maxResultBytes = limit(options.maxResultBytes, 16 * 1024 * 1024, 64 * 1024 * 1024);
+  const deadline = Math.min(initial.expiresAt, now() + limit(options.timeoutMs, 300_000, 600_000));
+  let calls = 0, resultBytes = 0, closed = false;
+  const controller = new AbortController();
+  const abort = () => { closed = true; controller.abort(); };
+  options.signal?.addEventListener("abort", abort, { once: true });
+  const assertOpen = () => {
+    if (closed || options.signal?.aborted) throw scopedTaskError("task.cancelled");
+    if (now() >= deadline) throw scopedTaskError("task.expired");
+  };
+  function conversation(value = initial.conversationId) {
+    assertOpen();
+    if (value !== initial.conversationId) throw scopedTaskError("task.conversation_mismatch");
+    return value;
+  }
+  async function run(operation) {
+    assertOpen();
+    if (calls >= maxCalls || resultBytes >= maxResultBytes) throw scopedTaskError("context.budget_exhausted");
+    calls++;
+    const checked = await client.getTask(initial.id, { signal: controller.signal });
+    assertOpen();
+    const current = checked?.task;
+    if (!current || current.id !== initial.id || current.conversationId !== initial.conversationId || current.triggerMessageId !== initial.triggerMessageId || scopedTaskExpiry(current.expiresAt) <= now() || ["cancelled", "expired", "revoked"].includes(current.status)) throw scopedTaskError("task.authorization_denied");
+    const result = await operation(controller.signal);
+    assertOpen();
+    const bytes = result?.bytes instanceof Uint8Array ? result.bytes.byteLength : Buffer.byteLength(JSON.stringify(result ?? null));
+    resultBytes += bytes;
+    if (resultBytes > maxResultBytes) throw scopedTaskError("context.budget_exhausted");
+    const messageConversation = result?.message?.conversationId;
+    if (messageConversation && messageConversation !== initial.conversationId) throw scopedTaskError("task.conversation_mismatch");
+    return result;
+  }
+  async function requireFeature(feature) {
+    const capabilities = await run((signal) => client.getCapabilities(initial.conversationId, { signal }));
+    if (capabilities?.features?.[feature] !== true) throw scopedTaskError("task.operation_unavailable");
+  }
+  function reference(operation, key) { return { taskId: initial.id, operation, key }; }
+  async function mutation(operation, key, execute) {
+    const operationReference = reference(operation, key);
+    try { return { ...await run(execute), operation: operationReference }; }
+    catch (error) { error.operation = operationReference; throw error; }
+  }
+  const scoped = {
+    task: Object.freeze({ ...initial }),
+    close() { abort(); options.signal?.removeEventListener("abort", abort); },
+    budget() { return { calls, maxCalls, resultBytes, maxResultBytes, expiresAt: deadline }; },
+    validate() { return run(async () => ({ valid: true })); },
+    getCapabilities() { return run((signal) => client.getCapabilities(initial.conversationId, { signal })); },
+    getOperation(operation, key) { return run((signal) => client.getOperation(initial.id, operation, key, { signal })); },
+    getContext(id = initial.conversationId, input = {}) { return run((signal) => client.getContext(conversation(id), { ...input, signal, limit: Math.min(input.limit ?? 12, 50) })); },
+    getMessage(messageId, input = {}) { return run((signal) => client.getMessage(messageId, { ...input, conversationId: initial.conversationId, signal })); },
+    listHistory(id = initial.conversationId, input = {}) { return run((signal) => client.listHistory(conversation(id), { ...input, signal, limit: Math.min(input.limit ?? 12, 50) })); },
+    searchMessages(id = initial.conversationId, input = {}) { return run((signal) => client.searchMessages(conversation(id), { ...input, signal, limit: Math.min(input.limit ?? 12, 50) })); },
+    listMembers(id = initial.conversationId) { return run((signal) => client.listMembers(conversation(id), { signal })); },
+    sendMessage(input) { conversation(input?.conversationId); return run((signal) => client.sendMessage({ ...input, signal })); },
+    async editMessage(messageId, input, options = {}) {
+      await requireFeature("conditionalMessageEdit");
+      const update = typeof input === "string" ? { plainText: input, expectedVersion: options.expectedVersion } : { ...input };
+      if (update.expectedVersion === undefined) update.expectedVersion = (await scoped.getMessage(messageId))?.message?.version;
+      if (!/^[a-f0-9]{64}$/u.test(update.expectedVersion || "")) throw scopedTaskError("message.version_required");
+      const key = "edit_" + crypto.createHash("sha256").update(`${messageId}:${update.expectedVersion}`).digest("hex");
+      return mutation("message.edit", key, (signal) => client.editMessage(messageId, update, { signal }));
+    },
+    sendCard(input) { conversation(input?.conversationId); return run((signal) => client.sendCard({ ...input, signal })); },
+    sendFeishuCard(input) { conversation(input?.conversationId); return run((signal) => client.sendFeishuCard({ ...input, signal })); },
+    async updateCard(cardId, input = {}) {
+      await requireFeature("taskCardUpdate");
+      if (!Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 1) throw scopedTaskError("card.revision_required");
+      const key = "card_" + crypto.createHash("sha256").update(`${cardId}:${input.expectedRevision}`).digest("hex");
+      return mutation("card.update", key, (signal) => client.updateCard(cardId, { ...input, signal }));
+    },
+    async updateFeishuCard(cardId, input = {}) {
+      await requireFeature("taskCardUpdate");
+      if (!Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 1) throw scopedTaskError("card.revision_required");
+      const key = "card_" + crypto.createHash("sha256").update(`${cardId}:${input.expectedRevision}`).digest("hex");
+      return mutation("card.update", key, (signal) => client.updateFeishuCard(cardId, { ...input, signal }));
+    },
+    sendFile(input) { conversation(input?.conversationId); return run((signal) => client.sendFile({ ...input, signal })); },
+    uploadFile(input) { conversation(input?.conversationId); return run((signal) => client.uploadFile({ ...input, signal })); },
+    reserveUpload(input) { conversation(input?.conversationId); return run((signal) => client.reserveUpload({ ...input, signal })); },
+    completeUploadContent(uploadId, bytes, mimeType) { return run((signal) => client.completeUploadContent(uploadId, bytes, mimeType, { signal })); },
+    getUploadStatus(uploadId) { return run((signal) => client.getUploadStatus(uploadId, { signal })); },
+    readAttachment(input) { conversation(input?.conversationId); return run((signal) => client.readAttachment({ ...input, signal })); },
+    setTyping(id, input = {}) { conversation(id); return client.setTyping(id, { ...input, signal: input.signal ? AbortSignal.any([input.signal, controller.signal]) : controller.signal }); },
+  };
+  return Object.freeze(scoped);
+}
+
+// --- src/task-tools.js ---
+const taskToolSchema = (properties, required = []) => ({ type: "object", additionalProperties: false, properties, required });
+const taskToolString = { type: "string", minLength: 1, maxLength: 4096 };
+const taskHistoryProperties = { before: taskToolString, query: { type: "string", minLength: 1, maxLength: 500 },
+  authorId: taskToolString, startTime: taskToolString, endTime: taskToolString,
+  limit: { type: "integer", minimum: 1, maximum: 50 } };
+const TASK_CARD_ACTIONS = new Set(["confirm", "cancel", "submit", "refresh"]);
+const TASK_CARD_INPUT_PROPERTIES = {
+  title: { type: "string", minLength: 1, maxLength: 180 }, markdown: { type: "string", maxLength: 16_000 },
+  tone: { enum: ["blue", "wathet", "turquoise", "green", "yellow", "orange", "red", "grey"] },
+  fallbackText: { type: "string", maxLength: 3000 },
+  buttons: { type: "array", maxItems: 4, items: { type: "object", additionalProperties: false,
+    properties: { actionId: { enum: [...TASK_CARD_ACTIONS] }, label: { type: "string", maxLength: 180 },
+      style: { enum: ["default", "primary", "danger"] }, value: { type: "object" } }, required: ["actionId", "label"] } },
+};
+const TASK_TOOL_FEATURES = Object.freeze({ duallane_edit_message: "conditionalMessageEdit", duallane_send_card: "taskCardUpdate", duallane_update_card: "taskCardUpdate" });
+
+// Both task and operator MCP use the same fixed-action card conversion input.
+export function buildAgentInteractiveCard(input) {
+  const title = input.title || "通知卡片", markdown = input.markdown || "";
+  if (typeof title !== "string" || title.length > 180 || typeof markdown !== "string" || markdown.length > 16_000) throw taskToolError("card.invalid_input");
+  const elements = [{ tag: "markdown", content: markdown }];
+  if (input.buttons !== undefined && (!Array.isArray(input.buttons) || input.buttons.length > 4)) throw taskToolError("card.invalid_input");
+  if (input.buttons?.length) {
+    const seen = new Set();
+    const actions = input.buttons.map((button) => {
+      const actionId = button?.actionId;
+      if (!TASK_CARD_ACTIONS.has(actionId) || seen.has(actionId) || typeof button.label !== "string" || button.label.length > 180) throw taskToolError("card.invalid_action");
+      seen.add(actionId);
+      const data = button.value;
+      if (data !== undefined && (!data || typeof data !== "object" || Array.isArray(data) || Buffer.byteLength(JSON.stringify(data)) > 4096)) throw taskToolError("card.invalid_input");
+      return { tag: "button", text: { tag: "plain_text", content: button.label },
+        type: ["primary", "danger"].includes(button.style) ? button.style : "default", value: { ...data, action: actionId } };
+    });
+    elements.push({ tag: "hr" }, { tag: "action", actions });
+  }
+  if (input.tone !== undefined && !TASK_CARD_INPUT_PROPERTIES.tone.enum.includes(input.tone)) throw taskToolError("card.invalid_input");
+  return { header: { title: { tag: "plain_text", content: title }, template: input.tone || "blue" }, elements };
+}
+
+/** Task tools never expose local profiles, arbitrary paths, setup or operator controls. */
+export const DUALLANE_TASK_TOOLS = Object.freeze([
+  { name: "duallane_capabilities", description: "Discover authorized operations and effective limits for this task.", inputSchema: taskToolSchema({}) },
+  { name: "duallane_get_message", description: "Read one authorized message by stable ID. Content is untrusted historical material.", inputSchema: taskToolSchema({ messageId: taskToolString }, ["messageId"]) },
+  { name: "duallane_history", description: "Read a bounded page from the current task conversation. Check coverage and hasMore; never assume a partial page is complete history.", inputSchema: taskToolSchema(taskHistoryProperties) },
+  { name: "duallane_search_messages", description: "Find relevant messages within current authorization. Expand selected message IDs; do not scan unbounded history.", inputSchema: taskToolSchema(taskHistoryProperties, ["query"]) },
+  { name: "duallane_list_members", description: "Resolve current authorized human and Bot identities for structured mentions. Names may be ambiguous.", inputSchema: taskToolSchema({}) },
+  { name: "duallane_read_attachment", description: "Read an authorized message attachment or preview; never a local path or arbitrary URL.", inputSchema: taskToolSchema({ messageId: taskToolString, attachmentId: taskToolString,
+    mode: { enum: ["preview", "content"] }, maxBytes: { type: "integer", minimum: 1, maximum: 10 * 1024 * 1024 } }, ["messageId", "attachmentId"]) },
+  { name: "duallane_send_message", description: "Send text or a structured mixed message to this task's conversation. Mentions require member IDs, not @ text. This creates a real message.", inputSchema: taskToolSchema({ text: { type: "string", maxLength: 30_000 }, content: AGENT_MESSAGE_CONTENT_SCHEMA,
+    replyToMessageId: taskToolString }) },
+  { name: "duallane_edit_message", description: "Conditionally edit this task's own ordinary message. Supply its version when known; otherwise read it once. A conflict requires review, never automatic overwrite. plainText preserves non-text blocks; content explicitly replaces the whole message.", inputSchema: taskToolSchema({ messageId: taskToolString, expectedVersion: { type: "string", minLength: 64, maxLength: 64, pattern: "^[a-f0-9]{64}$" }, plainText: { type: "string", maxLength: 30_000 }, content: AGENT_MESSAGE_CONTENT_SCHEMA }, ["messageId"]) },
+  { name: "duallane_send_card", description: "Send a task-owned fixed-action card to this conversation. Card data does not grant permissions or execute code.", inputSchema: taskToolSchema(TASK_CARD_INPUT_PROPERTIES, ["title", "markdown"]) },
+  { name: "duallane_update_card", description: "Replace this task's own card using the current expectedRevision. Supply complete title/markdown/actions; conflicts are not automatically retried.", inputSchema: taskToolSchema({ cardId: taskToolString, expectedRevision: { type: "integer", minimum: 1, maximum: Number.MAX_SAFE_INTEGER }, ...TASK_CARD_INPUT_PROPERTIES }, ["cardId", "expectedRevision", "title", "markdown"]) },
+  { name: "duallane_query_operation", description: "Coordinate a known operation reference in this task. committed proves server submission, not human reading; unknown with safeToRetry=false must not be blindly reissued.", inputSchema: taskToolSchema({ operation: { enum: ["message.send", "message.edit", "card.send", "card.update"] }, key: taskToolString }, ["operation", "key"]) },
+]);
+
+function taskToolError(code) { return Object.assign(new Error("DualLane task tool failed"), { code }); }
+
+export function safeAgentOperationReference(value, taskId) {
+  const valid = (text) => typeof text === "string" && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(text);
+  if (!value || !valid(value.taskId) || !valid(value.key) || (taskId && value.taskId !== taskId) || !["message.send", "message.edit", "card.send", "card.update"].includes(value.operation)) return undefined;
+  return { taskId: value.taskId, operation: value.operation, key: value.key };
+}
+
+function taskToolArguments(tool, args) {
+  if (!args || typeof args !== "object" || Array.isArray(args)) throw taskToolError("tool.invalid_arguments");
+  for (const name of Object.keys(args)) if (!Object.hasOwn(tool.inputSchema.properties, name)) throw taskToolError("tool.invalid_arguments");
+  for (const name of tool.inputSchema.required) if (args[name] === undefined) throw taskToolError("tool.invalid_arguments");
+  for (const [name, value] of Object.entries(args)) {
+    const schema = tool.inputSchema.properties[name];
+    if (schema.type === "string" && (typeof value !== "string" || value.length < (schema.minLength ?? 0) || value.length > (schema.maxLength ?? 4096))) throw taskToolError("tool.invalid_arguments");
+    if (schema.type === "integer" && (!Number.isSafeInteger(value) || value < schema.minimum || value > schema.maximum)) throw taskToolError("tool.invalid_arguments");
+    if (schema.enum && !schema.enum.includes(value)) throw taskToolError("tool.invalid_arguments");
+  }
+}
+
+export function createTaskToolServer(client, options = {}) {
+  if (!client?.task || typeof client.validate !== "function") throw taskToolError("task.invalid_context");
+  const completedWrites = new Map();
+  let capabilities = options.capabilities;
+  const availableTools = () => DUALLANE_TASK_TOOLS.filter((tool) => !TASK_TOOL_FEATURES[tool.name] || capabilities?.features?.[TASK_TOOL_FEATURES[tool.name]] === true);
+  async function getTools() {
+    capabilities = await client.getCapabilities();
+    return availableTools();
+  }
+  async function rememberWrite(name, input, operationId, execute) {
+    if (typeof operationId !== "string" || !operationId || operationId.length > 128) throw taskToolError("tool.operation_id_required");
+    const fingerprint = JSON.stringify([name, input]);
+    if (completedWrites.has(operationId)) {
+      await client.validate();
+      const previous = completedWrites.get(operationId);
+      if (previous.fingerprint !== fingerprint) throw taskToolError("tool.idempotency_conflict");
+      return previous.promise;
+    }
+    if (completedWrites.size >= 128) throw taskToolError("context.budget_exhausted");
+    const key = `tool-${crypto.createHash("sha256").update(`${client.task.id}\n${operationId}`).digest("hex")}`;
+    const promise = Promise.resolve().then(() => execute(key));
+    completedWrites.set(operationId, { fingerprint, promise });
+    return promise;
+  }
+  async function withOperation(operation, key, execute) {
+    const reference = { taskId: client.task.id, operation, key };
+    try { return { ...await execute(), operation: reference }; }
+    catch (error) { error.operation = reference; throw error; }
+  }
+  async function callTool(name, input = {}, operationId) {
+    const tool = DUALLANE_TASK_TOOLS.find((item) => item.name === name);
+    if (!tool) throw taskToolError("tool.not_available");
+    taskToolArguments(tool, input);
+    if (TASK_TOOL_FEATURES[name]) {
+      await getTools();
+      if (!availableTools().some((item) => item.name === name)) throw taskToolError("tool.not_available");
+    }
+    const conversationId = client.task.conversationId;
+    switch (name) {
+      case "duallane_capabilities": return client.getCapabilities();
+      case "duallane_get_message": return client.getMessage(input.messageId);
+      case "duallane_history": return client.listHistory(conversationId, input);
+      case "duallane_search_messages": return client.searchMessages(conversationId, input);
+      case "duallane_list_members": return client.listMembers();
+      case "duallane_query_operation": return client.getOperation(input.operation, input.key);
+      case "duallane_read_attachment": {
+        const resource = await client.readAttachment({ conversationId, ...input });
+        return { mimeType: resource.mimeType, byteSize: resource.byteSize, encoding: "base64", data: Buffer.from(resource.bytes).toString("base64"),
+          reference: { conversationId, messageId: input.messageId, attachmentId: input.attachmentId }, trust: "untrusted-attachment" };
+      }
+      case "duallane_send_message": {
+        if (input.text === undefined && input.content === undefined) throw taskToolError("tool.invalid_arguments");
+        return rememberWrite(name, input, operationId, (key) => withOperation("message.send", key,
+          () => client.sendMessage({ conversationId, ...input, clientMessageId: key, idempotencyKey: key })));
+      }
+      case "duallane_edit_message": return rememberWrite(name, input, operationId, () => client.editMessage(input.messageId, input));
+      case "duallane_send_card": return rememberWrite(name, input, operationId, (key) => withOperation("card.send", key,
+        () => client.sendFeishuCard({ conversationId, card: buildAgentInteractiveCard(input), fallbackText: input.fallbackText || input.title, clientMessageId: key, idempotencyKey: key })));
+      case "duallane_update_card": return rememberWrite(name, input, operationId, () => client.updateFeishuCard(input.cardId,
+        { expectedRevision: input.expectedRevision, card: buildAgentInteractiveCard(input), fallbackText: input.fallbackText || input.title }));
+      default: throw taskToolError("tool.not_available");
+    }
+  }
+  async function handleJsonRpc(message) {
+    const id = message?.id ?? null;
+    if (!message || message.jsonrpc !== "2.0") return { jsonrpc: "2.0", id, error: { code: -32600, message: "Invalid request" } };
+    if (message.id === undefined && String(message.method).startsWith("notifications/")) return null;
+    if (message.method === "initialize") return { jsonrpc: "2.0", id, result: { protocolVersion: "2024-11-05", capabilities: { tools: { listChanged: false } }, serverInfo: { name: "duallane-task-tools", version: "1" } } };
+    if (message.method === "ping") return { jsonrpc: "2.0", id, result: {} };
+    if (message.method === "tools/list") return { jsonrpc: "2.0", id, result: { tools: await getTools() } };
+    if (message.method !== "tools/call") return { jsonrpc: "2.0", id, error: { code: -32601, message: "Method not found" } };
+    try {
+      const result = await callTool(message.params?.name, message.params?.arguments ?? {}, String(id));
+      const image = /^image\/(png|jpeg|gif|webp)$/u.test(result?.mimeType || "") && result.encoding === "base64";
+      const metadata = image ? { ...result, data: undefined } : result;
+      return { jsonrpc: "2.0", id, result: { isError: false, structuredContent: metadata,
+        content: [...(image ? [{ type: "image", mimeType: result.mimeType, data: result.data }] : []), { type: "text", text: JSON.stringify(metadata) }] } };
+    } catch (error) {
+      const code = /^[a-z0-9][a-z0-9._-]{0,127}$/u.test(error?.code || "") ? error.code : "tool.execution_failed";
+      const operation = safeAgentOperationReference(error?.operation, client.task.id);
+      return { jsonrpc: "2.0", id, result: { isError: true, content: [{ type: "text", text: JSON.stringify({ error: { code, message: "Task tool could not complete; check current authorization, coverage and budget.", ...(operation ? { operation } : {}) } }) }] } };
+    }
+  }
+  return { callTool, handleJsonRpc, getTools, availableTools };
+}
+
+/** Credentials for this loopback broker belong to the trusted adapter environment. */
+export async function createTaskToolBroker(client, { signal, capabilities } = {}) {
+  const secret = crypto.randomBytes(32).toString("hex");
+  const tools = createTaskToolServer(client, { capabilities: capabilities ?? await client.getCapabilities() });
+  const connections = new Set();
+  let closed = false;
+  const server = http.createServer(async (request, response) => {
+    const expectedHost = `127.0.0.1:${server.address()?.port}`;
+    if (closed || request.method !== "POST" || request.url !== "/task-tools" || request.headers.host !== expectedHost || request.headers.origin || request.headers.authorization !== `Bearer ${secret}` || request.headers["content-type"] !== "application/json") {
+      response.writeHead(403).end(); return;
+    }
+    const chunks = []; let size = 0;
+    try {
+      for await (const chunk of request) {
+        size += chunk.length;
+        if (size > 128 * 1024) { response.writeHead(413).end(); return; }
+        chunks.push(chunk);
+      }
+      const message = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      const result = await tools.handleJsonRpc(message);
+      if (closed || response.destroyed) return;
+      response.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" }).end(JSON.stringify(result));
+    } catch { if (response.destroyed) return; if (!response.headersSent) response.writeHead(400); response.end(); }
+  });
+  server.requestTimeout = 35_000; server.headersTimeout = 5000;
+  server.on("connection", (connection) => { connections.add(connection); connection.on("close", () => connections.delete(connection)); });
+  await new Promise((resolve, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", resolve); });
+  const close = () => {
+    if (closed) return; closed = true;
+    signal?.removeEventListener("abort", close);
+    server.close(); for (const connection of connections) connection.destroy();
+  };
+  signal?.addEventListener("abort", close, { once: true });
+  if (signal?.aborted) { close(); throw taskToolError("task.cancelled"); }
+  return { descriptor: { protocol: "duallane.agent.tools", version: 1, transport: "mcp-stdio", command: "duallane-agent mcp --task",
+    tools: tools.availableTools(), limits: client.budget(), scope: { conversationId: client.task.conversationId, taskId: client.task.id } },
+    environment: { DUALLANE_TASK_BROKER_URL: `http://127.0.0.1:${server.address()?.port}/task-tools`, DUALLANE_TASK_BROKER_KEY: secret }, close };
+}
+
+export function createTaskBrokerMcpAdapter({ url = process.env.DUALLANE_TASK_BROKER_URL, key = process.env.DUALLANE_TASK_BROKER_KEY, fetchImpl = globalThis.fetch } = {}) {
+  let endpoint;
+  try { endpoint = new URL(url); } catch { throw taskToolError("task.broker_unavailable"); }
+  if (endpoint.protocol !== "http:" || endpoint.hostname !== "127.0.0.1" || endpoint.pathname !== "/task-tools" || endpoint.search || endpoint.hash || endpoint.username || endpoint.password || !/^[a-f0-9]{64}$/u.test(key || "")) throw taskToolError("task.broker_unavailable");
+  // Only this trusted stdio adapter receives the broker key. It does not pass it to an LLM.
+  return { async handleJsonRpc(message) {
+    if (!message || message.jsonrpc !== "2.0") return { jsonrpc: "2.0", id: message?.id ?? null, error: { code: -32600, message: "Invalid request" } };
+    try {
+      const response = await fetchImpl(endpoint, { method: "POST", redirect: "error", signal: AbortSignal.timeout(35_000),
+        headers: { authorization: `Bearer ${key}`, "content-type": "application/json" }, body: JSON.stringify(message) });
+      if (!response.ok) throw taskToolError("task.broker_unavailable");
+      return await response.json();
+    } catch { return { jsonrpc: "2.0", id: message.id ?? null, error: { code: -32603, message: "Task tools are unavailable" } }; }
+  } };
+}
+
 // --- src/index.js ---
-export const DUALLANE_AGENT_SDK_VERSION = "1.1.2";
+export const DUALLANE_AGENT_SDK_VERSION = "1.2.0";
 export const DUALLANE_GATEWAY_VERSION = 1;
 
 export function compareRuntimeSemver(a, b) {
@@ -586,6 +1027,7 @@ export class DualLaneAgentClient {
   #ackTimeoutMs;
   #connectTimeoutMs;
   #requestTimeoutMs;
+  #taskId;
   #reconnect;
   #socket = null;
   #stopped = true;
@@ -610,6 +1052,7 @@ export class DualLaneAgentClient {
     this.#ackTimeoutMs = normalizeDuration(options.ackTimeoutMs, 8_000, 1_000, 60_000, "ackTimeoutMs");
     this.#connectTimeoutMs = normalizeDuration(options.connectTimeoutMs, 10_000, 1_000, 60_000, "connectTimeoutMs");
     this.#requestTimeoutMs = normalizeDuration(options.requestTimeoutMs, 35_000, 1, 120_000, "requestTimeoutMs");
+    this.#taskId = options.taskId === undefined ? null : normalizeId(options.taskId, "taskId");
     this.#reconnect = Object.freeze({
       minDelayMs: normalizeDuration(options.reconnect?.minDelayMs, 500, 100, 60_000, "reconnect.minDelayMs"),
       maxDelayMs: normalizeDuration(options.reconnect?.maxDelayMs, 30_000, 500, 120_000, "reconnect.maxDelayMs"),
@@ -668,10 +1111,66 @@ export class DualLaneAgentClient {
     return this.#request("GET", "/api/bot-gateway/v1/me");
   }
 
+  async getCapabilities(conversationId, options = {}) {
+    const query = conversationId ? `?conversationId=${encodeURIComponent(normalizeId(conversationId, "conversationId"))}` : "";
+    return this.#request("GET", `/api/bot/v2/capabilities${query}`, undefined, options);
+  }
+
+  async createTask(input = {}, options = {}) {
+    return this.#request("POST", "/api/bot/v2/tasks", { eventId: normalizeId(input.eventId, "eventId") }, options);
+  }
+
+  async getTask(taskId, options = {}) {
+    return this.#request("GET", `/api/bot/v2/tasks/${encodeURIComponent(normalizeId(taskId, "taskId"))}`, undefined, options);
+  }
+
+  async cancelAgentTask(taskId, options = {}) {
+    return this.#request("DELETE", `/api/bot/v2/tasks/${encodeURIComponent(normalizeId(taskId, "taskId"))}`, undefined, options);
+  }
+
+  async getOperation(taskId, operation, key, options = {}) {
+    const values = [taskId, operation, key].map((value) => encodeURIComponent(normalizeId(value, "operation reference")));
+    return this.#request("GET", `/api/bot/v2/tasks/${values[0]}/operations/${values[1]}/${values[2]}`, undefined, options);
+  }
+
+  forTask(task, options = {}) {
+    const credentialed = new DualLaneAgentClient({ url: this.#origin, token: this.#token, fetch: this.#fetch,
+      webSocketFactory: this.#webSocketFactory, adapterVersion: this.#adapterVersion,
+      requestTimeoutMs: this.#requestTimeoutMs, taskId: task.id });
+    return createTaskScopedClient(credentialed, task, options);
+  }
+
+  async getMessage(messageId, options = {}) {
+    const query = options.conversationId ? `?conversationId=${encodeURIComponent(normalizeId(options.conversationId, "conversationId"))}` : "";
+    return this.#request("GET", `/api/bot/v2/messages/${encodeURIComponent(normalizeId(messageId, "messageId"))}${query}`, undefined, options);
+  }
+
+  async listHistory(conversationId, options = {}) {
+    const query = new URLSearchParams();
+    for (const name of ["before", "query", "authorId", "startTime", "endTime"]) {
+      if (options[name] !== undefined) {
+        const value = options[name] instanceof Date && ["startTime", "endTime"].includes(name) ? options[name].toISOString() : String(options[name]);
+        if (!value || value.length > 4096) throw new TypeError(`${name} is invalid`);
+        query.set(name, value);
+      }
+    }
+    if (options.limit !== undefined) query.set("limit", String(normalizeLimit(options.limit)));
+    return this.#request("GET", `/api/bot/v2/conversations/${encodeURIComponent(normalizeId(conversationId, "conversationId"))}/messages?${query}`, undefined, options);
+  }
+
+  async searchMessages(conversationId, options = {}) {
+    if (typeof options.query !== "string" || !options.query.trim()) throw new TypeError("query is required");
+    return this.listHistory(conversationId, options);
+  }
+
+  async listMembers(conversationId, options = {}) {
+    return this.#request("GET", `/api/bot/v2/conversations/${encodeURIComponent(normalizeId(conversationId, "conversationId"))}/members`, undefined, options);
+  }
+
   async getContext(conversationId, options = {}) {
     const id = normalizeId(conversationId, "conversationId");
     const query = options.limit === undefined ? "" : `?limit=${normalizeLimit(options.limit)}`;
-    return this.#request("GET", `/api/bot-gateway/v1/conversations/${encodeURIComponent(id)}/context${query}`);
+    return this.#request("GET", `/api/bot-gateway/v1/conversations/${encodeURIComponent(id)}/context${query}`, undefined, options);
   }
 
   async acknowledge(input) {
@@ -690,21 +1189,21 @@ export class DualLaneAgentClient {
     const clientMessageId = normalizeId(input.clientMessageId ?? createClientId("msg"), "clientMessageId");
     const idempotencyKey = normalizeId(input.idempotencyKey ?? clientMessageId, "idempotencyKey");
     if (input.text === undefined && input.content === undefined) throw new TypeError("text or content is required");
-    return this.#request("POST", "/api/bot-gateway/v1/messages", compact({
+    return this.#taskOperation("message.send", idempotencyKey, () => this.#request("POST", "/api/bot-gateway/v1/messages", compact({
       conversationId,
       clientMessageId,
       idempotencyKey,
       text: input.text,
-      content: input.content,
+      content: input.content === undefined ? undefined : buildMessageContent(input.content),
       replyToMessageId: input.replyToMessageId
-    }));
+    }), { signal: input.signal }));
   }
 
   async sendCard(input = {}) {
     const conversationId = normalizeId(input.conversationId, "conversationId");
     const clientMessageId = normalizeId(input.clientMessageId ?? createClientId("cardmsg"), "clientMessageId");
     const idempotencyKey = normalizeId(input.idempotencyKey ?? clientMessageId, "idempotencyKey");
-    return this.#request("POST", "/api/bot-gateway/v1/cards", compact({
+    return this.#taskOperation("card.send", idempotencyKey, () => this.#request("POST", "/api/bot-gateway/v1/cards", compact({
       conversationId,
       clientMessageId,
       idempotencyKey,
@@ -715,7 +1214,7 @@ export class DualLaneAgentClient {
       format: input.format,
       feishuCard: input.feishuCard,
       card: input.card
-    }));
+    }), { signal: input.signal }));
   }
 
   async sendFeishuCard(input = {}) {
@@ -724,13 +1223,17 @@ export class DualLaneAgentClient {
   }
 
   async updateCard(cardId, input = {}) {
-    return this.#request("PATCH", `/api/bot-gateway/v1/cards/${encodeURIComponent(normalizeId(cardId, "cardId"))}`, compact(input));
+    const { signal, ...body } = input;
+    const id = normalizeId(cardId, "cardId");
+    const key = "card_" + crypto.createHash("sha256").update(`${id}:${body.expectedRevision}`).digest("hex");
+    return this.#taskOperation("card.update", key, () => this.#request("PATCH", `/api/bot-gateway/v1/cards/${encodeURIComponent(id)}`, compact(body), { signal }));
   }
 
   async updateFeishuCard(cardId, input = {}) {
     if (!input.card || typeof input.card !== "object" || Array.isArray(input.card)) throw new TypeError("card is required");
     return this.updateCard(cardId, compact({
       expectedRevision: input.expectedRevision,
+      signal: input.signal,
       fallbackText: input.fallbackText,
       format: "feishu-card",
       feishuCard: input.card
@@ -837,11 +1340,21 @@ export class DualLaneAgentClient {
     return this.#request("GET", "/api/bot/v2/doctor");
   }
 
-  async editMessage(messageId, plainText) {
+  async editMessage(messageId, input, options = {}) {
     const id = normalizeId(messageId, "messageId");
-    const text = typeof plainText === "string" ? plainText.trim() : "";
-    if (!text) throw new TypeError("plainText is required");
-    return this.#request("PATCH", `/api/bot/v2/messages/${encodeURIComponent(id)}`, { plainText: text });
+    const update = typeof input === "string" ? { plainText: input.trim(), expectedVersion: options.expectedVersion } : input;
+    if (!update || typeof update !== "object" || Array.isArray(update)) throw new TypeError("message update is required");
+    const body = compact({ plainText: update.plainText, content: update.content === undefined ? undefined : buildMessageContent(update.content), expectedVersion: update.expectedVersion });
+    if ((body.plainText === undefined || body.plainText === "") && body.content === undefined) throw new TypeError("plainText or content is required");
+    if (body.plainText !== undefined && (typeof body.plainText !== "string" || body.plainText.length > 30_000)) throw new TypeError("plainText is invalid");
+    if (this.#taskId) {
+      if (body.expectedVersion === undefined) body.expectedVersion = (await this.getMessage(id, { signal: options.signal }))?.message?.version;
+      if (!/^[a-f0-9]{64}$/u.test(body.expectedVersion || "")) throw new DualLaneAgentError("message.version_required", "A current message version is required");
+    } else if (body.content !== undefined || body.expectedVersion !== undefined) {
+      throw new DualLaneAgentError("task.context_required", "Conditional or structured edits require a task client");
+    }
+    const key = "edit_" + crypto.createHash("sha256").update(`${id}:${body.expectedVersion}`).digest("hex");
+    return this.#taskOperation("message.edit", key, () => this.#request("PATCH", `/api/bot/v2/messages/${encodeURIComponent(id)}`, body, options));
   }
 
   async sendFile(input = {}) {
@@ -868,7 +1381,8 @@ export class DualLaneAgentClient {
       "POST",
       `/api/bot/v2/conversations/${encodeURIComponent(conversationId)}/files?${params.toString()}`,
       rawBytes,
-      mimeType
+      mimeType,
+      { signal: input.signal }
     );
   }
 
@@ -886,11 +1400,11 @@ export class DualLaneAgentClient {
       mimeType: String(input.mimeType || inferMimeTypeFromFileName(fileName)),
       byteSize,
       visibility: "conversation",
-    });
+    }, { signal: input.signal });
   }
 
-  async getUploadStatus(uploadId) {
-    return this.#request("GET", `/api/bot/v2/uploads/${encodeURIComponent(normalizeId(uploadId, "uploadId"))}`);
+  async getUploadStatus(uploadId, options = {}) {
+    return this.#request("GET", `/api/bot/v2/uploads/${encodeURIComponent(normalizeId(uploadId, "uploadId"))}`, undefined, options);
   }
 
   async readAttachment(input = {}) {
@@ -913,14 +1427,15 @@ export class DualLaneAgentClient {
     });
   }
 
-  async completeUploadContent(uploadId, rawBytes, mimeType = "application/octet-stream") {
+  async completeUploadContent(uploadId, rawBytes, mimeType = "application/octet-stream", options = {}) {
     const id = normalizeId(uploadId, "uploadId");
     rawBytes = normalizeFileBytes(rawBytes, { allowText: false });
     return this.#requestBinary(
       "PUT",
       `/api/bot/v2/uploads/${encodeURIComponent(id)}/content`,
       rawBytes,
-      mimeType
+      mimeType,
+      options
     );
   }
 
@@ -975,6 +1490,13 @@ export class DualLaneAgentClient {
     return { timeout: true, lastSequence: Math.max(initialCursor, this.#lastSequence), transport: "poll" };
   }
 
+  async #taskOperation(operation, key, execute) {
+    if (!this.#taskId) return execute();
+    const reference = { taskId: this.#taskId, operation, key };
+    try { return { ...await execute(), operation: reference }; }
+    catch (error) { error.operation = reference; throw error; }
+  }
+
   async #request(method, path, body, options = {}) {
     return this.#gatewayRequest(method, path, {
       body: body === undefined ? undefined : JSON.stringify(body),
@@ -983,8 +1505,8 @@ export class DualLaneAgentClient {
     });
   }
 
-  async #requestBinary(method, path, rawBytes, contentType = "application/octet-stream") {
-    return this.#gatewayRequest(method, path, { body: rawBytes, contentType, byteSize: rawBytes.byteLength });
+  async #requestBinary(method, path, rawBytes, contentType = "application/octet-stream", options = {}) {
+    return this.#gatewayRequest(method, path, { body: rawBytes, contentType, byteSize: rawBytes.byteLength, ...options });
   }
 
   async #gatewayRequest(method, route, options = {}) {
@@ -1003,6 +1525,7 @@ export class DualLaneAgentClient {
             "content-type": options.contentType,
             "content-length": options.byteSize === undefined ? undefined : String(options.byteSize),
             "x-duallane-adapter-version": this.#adapterVersion,
+            "x-duallane-task": this.#taskId || undefined,
           }),
           body: options.body,
         },
@@ -1860,15 +2383,18 @@ export async function prepareAgentInputs({ client, event, triggerMessage, contex
       const result = await client.readAttachment({ ...reference, mode, maxBytes: Math.min(remaining, mode === "preview" ? 64 * 1024 : remaining), signal });
       const available = remaining;
       remaining -= result.bytes.byteLength;
-      validateArtifactBytes(result.bytes, result.mimeType, { source: "https", maxBytes: available });
+      // A currently authorized DL attachment is distinct from an arbitrary
+      // public URL. Validate its opaque envelope without rendering/executing it.
+      const checked = validateArtifactBytes(result.bytes, result.mimeType, { source: "inline", maxBytes: available });
+      const textInput = checked.mimeType.startsWith("text/") || ["application/json", "application/xml", "application/javascript"].includes(checked.mimeType);
       inputs.push({
         ...reference,
         status: "available",
-        kind: result.mimeType.startsWith("image/") ? "image" : result.mimeType === "text/plain" ? "text" : "document",
-        mimeType: result.mimeType,
+        kind: checked.mimeType.startsWith("image/") ? "image" : textInput ? "text" : "document",
+        mimeType: checked.mimeType,
         byteSize: result.bytes.byteLength,
-        encoding: result.mimeType === "text/plain" ? "utf8" : "base64",
-        data: result.mimeType === "text/plain" ? result.bytes.toString("utf8") : result.bytes.toString("base64"),
+        encoding: textInput ? "utf8" : "base64",
+        data: Buffer.from(result.bytes).toString(textInput ? "utf8" : "base64"),
         trust: "untrusted-attachment",
       });
     } catch (error) {
@@ -1911,7 +2437,7 @@ function bridgeHumanMessage(message) {
   return message && ["human", "user"].includes(message.authorKind || message.senderKind || message.kind);
 }
 
-export function resolveAgentTrigger(event, context) {
+export function resolveAgentTrigger(event, context, authorization) {
   const payload = event?.payload || {};
   if (event?.type === "command.invoked") {
     if (payload.argsComplete === false) throw new AgentRuntimeError("input.trigger_truncated");
@@ -1925,7 +2451,9 @@ export function resolveAgentTrigger(event, context) {
     if (!message && payload.textComplete === true && typeof payload.text === "string") {
       return { id: explicitId, authorKind: "human", plainText: payload.text };
     }
-    if (!message || ["bot", "system"].includes(message.authorKind || message.kind)) {
+    const kind = message?.authorKind || message?.kind;
+    const trustedBotTrigger = kind === "bot" && authorization?.triggerMessageId === explicitId && authorization?.conversationId === event.conversationId;
+    if (!message || kind === "system" || (kind === "bot" && !trustedBotTrigger)) {
       throw new AgentRuntimeError("input.trigger_unavailable");
     }
     return structuredClone(message);
@@ -1938,11 +2466,11 @@ export function resolveAgentTrigger(event, context) {
   return structuredClone(human);
 }
 
-export function buildAgentBridgeRequest({ taskId, event, context, conversation, capabilities = {}, inputs = [], artifacts = [] }) {
+export function buildAgentBridgeRequest({ taskId, event, context, conversation, capabilities = {}, inputs = [], artifacts = [], authorization }) {
   if (!conversation?.id || conversation.id !== event?.conversationId) {
     throw new AgentRuntimeError("input.conversation_mismatch");
   }
-  const triggerMessage = resolveAgentTrigger(event, context);
+  const triggerMessage = resolveAgentTrigger(event, context, authorization);
   return {
     protocol: "duallane.agent.request",
     version: AGENT_BRIDGE_PROTOCOL_VERSION,
@@ -2004,7 +2532,10 @@ export function parseAgentBridgeResult(raw, { taskId, validateBytes } = {}) {
   if (result.protocol !== "duallane.agent.result" || result.version !== 1) throw new AgentRuntimeError("bridge.protocol_unsupported");
   if (result.taskId !== undefined && result.taskId !== taskId) throw new AgentRuntimeError("bridge.task_mismatch");
   if (result.status !== "completed") throw new AgentRuntimeError(result.status === "cancelled" ? "bridge.cancelled" : "bridge.incomplete");
+  const content = result.content === undefined ? undefined : buildMessageContent(result.content);
+  if (result.text === undefined && content) result.text = content.plainText;
   if (typeof result.text !== "string" || result.text.length > 28_000) throw new AgentRuntimeError("bridge.invalid_text");
+  if (result.artifacts === undefined) result.artifacts = [];
   if (!Array.isArray(result.artifacts) || result.artifacts.length > 6) throw new AgentRuntimeError("artifact.count_limit");
   const seen = new Set(); let totalBytes = 0;
   const artifacts = result.artifacts.map((artifact) => {
@@ -2034,7 +2565,7 @@ export function parseAgentBridgeResult(raw, { taskId, validateBytes } = {}) {
     return { id: artifact.id, source: "inline", fileName, mimeType, bytes, sha256 };
   });
   if (!result.text.trim() && !artifacts.length) throw new AgentRuntimeError("bridge.empty_result");
-  return { text: result.text.trim(), artifacts };
+  return { text: result.text.trim(), artifacts, ...(content ? { content } : {}) };
 }
 
 // --- src/task-runtime.js ---
@@ -2203,7 +2734,8 @@ export function readAgentTaskSummary(options) {
   if (!fs.existsSync(file)) return { total: 0, active: 0, failed: 0, completed: 0, tasks: [] };
   const state = JSON.parse(taskReadFile(file).toString("utf8"));
   const tasks = (state.tasks || []).map((task) => ({ taskId: task.taskId, state: task.state, attempts: task.attempts,
-    error: task.error || null, updatedAt: task.updatedAt, expiresAt: task.expiresAt }));
+    error: task.error || null, updatedAt: task.updatedAt, expiresAt: task.expiresAt,
+    serverCancellationPending: task.remoteCancellationPending === true }));
   return { total: tasks.length, active: tasks.filter((t) => !TASK_TERMINAL.has(t.state)).length,
     failed: tasks.filter((t) => t.state === "failed").length, completed: tasks.filter((t) => t.state === "completed").length, tasks };
 }
@@ -2223,7 +2755,7 @@ export function createAgentTaskRuntime(options) {
   const { client, invoke, prepareInputs = async () => [], resolveMedia, validateBytes,
     onState = () => {}, now = Date.now, scopes = [] } = options;
   if (!client || typeof invoke !== "function") throw new AgentRuntimeError("runtime.invalid_adapter");
-  for (const field of ["maxTasks", "maxBytes", "retentionMs", "maxConcurrency", "maxAttempts", "retryDelayMs"]) {
+  for (const field of ["maxTasks", "maxBytes", "retentionMs", "maxConcurrency", "maxAttempts", "retryDelayMs", "authorizationPollMs"]) {
     if (options[field] !== undefined && (!Number.isSafeInteger(options[field]) || options[field] < (field === "retryDelayMs" ? 0 : 1))) throw new AgentRuntimeError("runtime.invalid_limit");
   }
   const maxTasks = Math.min(1000, Math.max(1, options.maxTasks ?? 200));
@@ -2238,6 +2770,8 @@ export function createAgentTaskRuntime(options) {
   const stateFile = path.join(directory, "tasks.json");
   let tasks = [], closed = false, started = false, timer, scheduling = false;
   const running = new Map(), activeConversations = new Set(), waiters = [], notifying = new Map();
+  const scopedClients = new Map();
+  const remoteControls = new Set();
   const notify = () => { try { onState(summary()); } catch { /* Observability cannot alter task state. */ } };
   const persist = () => {
     const bytes = Buffer.from(JSON.stringify({ version: 1, tasks }));
@@ -2294,9 +2828,62 @@ export function createAgentTaskRuntime(options) {
     const result = await client.listConversations();
     const conversation = result?.conversations?.find((item) => item.id === task.event.conversationId);
     if (!conversation || conversation.allowTrigger === false || conversation.allowSend === false) throw new AgentRuntimeError("task.authorization_denied");
+    let activeClient = client, capabilities;
+    if (typeof client.getCapabilities === "function") {
+      try { capabilities = await client.getCapabilities(conversation.id); }
+      catch (error) {
+        if (error?.statusCode !== 404 && error?.statusCode !== 405) throw error;
+        if (conversation.taskRequired === true || task.remoteTask) throw new AgentRuntimeError("task.protocol_required");
+      }
+      if (capabilities?.features?.taskAuthorization === true && task.event.type === "message.created") {
+        if (!task.remoteTask) {
+          const accepted = await client.createTask({ eventId: task.event.eventId });
+          const triggerId = task.event.payload?.messageId || task.event.payload?.message?.id || task.event.messageId;
+          if (!accepted?.task?.id || accepted.task.conversationId !== conversation.id || (triggerId && accepted.task.triggerMessageId !== triggerId)) throw new AgentRuntimeError("task.invalid_context");
+          task.remoteTask = accepted.task; persist();
+        }
+        const checked = await client.getTask(task.remoteTask.id);
+        if (!checked?.task || checked.task.id !== task.remoteTask.id || checked.task.conversationId !== conversation.id || checked.task.triggerMessageId !== task.remoteTask.triggerMessageId) throw new AgentRuntimeError("task.authorization_denied");
+        activeClient = scopedClients.get(task.taskId);
+        if (!activeClient) {
+          activeClient = client.forTask(checked.task);
+          scopedClients.set(task.taskId, activeClient);
+        }
+      } else if (capabilities?.taskRequired === true || conversation.taskRequired === true || task.remoteTask) {
+        throw new AgentRuntimeError("task.protocol_required");
+      }
+    } else if (conversation.taskRequired === true) throw new AgentRuntimeError("task.protocol_required");
     let context = null;
-    if (scopes.includes("messages:read_context") && conversation.allowContext !== false) context = await client.getContext(conversation.id, { limit: 50 });
-    return { conversation, context };
+    if (scopes.includes("messages:read_context") && conversation.allowContext !== false) context = await activeClient.getContext(conversation.id, { limit: 12 });
+    if (task.remoteTask && (!context?.messages?.some((message) => message.id === task.remoteTask.triggerMessageId))) {
+      const exact = await activeClient.getMessage(task.remoteTask.triggerMessageId);
+      if (!exact?.message?.id) throw new AgentRuntimeError("input.trigger_unavailable");
+      context = { ...(context || {}), messages: [...(context?.messages || []).slice(-11), exact.message] };
+    }
+    return { conversation, context, client: activeClient, capabilities };
+  }
+
+  function activeTaskClient(task) { return scopedClients.get(task.taskId) || client; }
+
+  function watchRemoteTask(task, controller) {
+    if (!task.remoteTask) return () => {};
+    let stopped = false, pending = false;
+    const check = async () => {
+      if (stopped || pending || controller.signal.aborted) return;
+      pending = true;
+      try {
+        const result = await client.getTask(task.remoteTask.id, { signal: controller.signal });
+        if (!result?.task || result.task.id !== task.remoteTask.id || result.task.conversationId !== task.event.conversationId
+          || result.task.triggerMessageId !== task.remoteTask.triggerMessageId
+          || ["cancelled", "expired", "revoked"].includes(result.task.status)
+          || Date.parse(result.task.expiresAt) <= now()) throw new AgentRuntimeError("task.authorization_denied");
+      }
+      catch (error) { if (!stopped) controller.abort(new AgentRuntimeError(error?.code || "task.authorization_denied")); }
+      finally { pending = false; }
+    };
+    const timer = setInterval(check, Math.min(30_000, Math.max(100, options.authorizationPollMs ?? 5000)));
+    timer.unref?.();
+    return () => { stopped = true; clearInterval(timer); };
   }
 
   function visibleArtifacts(conversationId, context) {
@@ -2310,14 +2897,14 @@ export function createAgentTaskRuntime(options) {
           expiresAt: task.expiresAt })));
   }
 
-  async function readArtifact(id, conversationId, context, signal, maxBytes = 10 * 1024 * 1024) {
+  async function readArtifact(id, conversationId, context, signal, maxBytes = 10 * 1024 * 1024, taskClient = client) {
     if (!scopes.includes("files:read_content") || !scopes.includes("messages:read_context") || typeof client.readAttachment !== "function") throw new AgentRuntimeError("artifact.read_scope_required");
     const visible = visibleArtifacts(conversationId, context).find((artifact) => artifact.artifactId === id);
     if (!visible) throw new AgentRuntimeError("artifact.reference_denied");
     const owner = tasks.find((task) => (task.artifacts || []).some((artifact) => artifact.artifactId === id));
     const record = owner.artifacts.find((artifact) => artifact.artifactId === id);
     if (record.byteSize > maxBytes) throw new AgentRuntimeError("input.attachment_limit");
-    const result = await client.readAttachment({ conversationId, messageId: record.messageId, attachmentId: record.attachmentId,
+    const result = await taskClient.readAttachment({ conversationId, messageId: record.messageId, attachmentId: record.attachmentId,
       mode: "content", signal, maxBytes });
     taskCheckCancelled(signal);
     if (owner.expiresAt <= now()) throw new AgentRuntimeError("artifact.expired");
@@ -2330,20 +2917,20 @@ export function createAgentTaskRuntime(options) {
 
   async function generate(task, authorization, signal) {
     taskCheckCancelled(signal);
-    const { conversation, context } = authorization;
-    const request = buildAgentBridgeRequest({ taskId: task.taskId, event: task.event, conversation, context,
+    const { conversation, context, client: taskClient } = authorization;
+    const request = buildAgentBridgeRequest({ taskId: task.taskId, event: task.event, conversation, context, authorization: task.remoteTask,
       capabilities: { publicMedia: Boolean(resolveMedia), incomingAttachments: scopes.some((scope) => ["files:read_content", "files:read_preview"].includes(scope)) },
       artifacts: visibleArtifacts(conversation.id, context) });
     task.triggerMessageId = request.triggerMessage?.id || null;
     persist();
-    request.inputs = await prepareInputs({ client, event: task.event, triggerMessage: request.triggerMessage, context, conversation, scopes, signal });
+    request.inputs = await prepareInputs({ client: taskClient, event: task.event, triggerMessage: request.triggerMessage, context, conversation, scopes, signal });
     taskCheckCancelled(signal);
     let remainingInputBytes = 10 * 1024 * 1024 - request.inputs.reduce((total, input) => total + (input.byteSize || 0), 0);
     const alreadyIncluded = new Set(request.inputs.map((input) => input.attachmentId));
     for (const reference of [...request.artifacts].reverse().filter((artifact) => !alreadyIncluded.has(artifact.attachmentId)).slice(0, 2)) {
       if (alreadyIncluded.has(reference.attachmentId) || request.inputs.length >= 6 || reference.byteSize > remainingInputBytes) continue;
       try {
-        const artifact = await readArtifact(reference.artifactId, conversation.id, context, signal, remainingInputBytes);
+        const artifact = await readArtifact(reference.artifactId, conversation.id, context, signal, remainingInputBytes, taskClient);
         remainingInputBytes -= artifact.bytes.length;
         alreadyIncluded.add(reference.attachmentId);
         request.inputs.push({ artifactId: reference.artifactId, attachmentId: reference.attachmentId, messageId: reference.messageId,
@@ -2355,7 +2942,19 @@ export function createAgentTaskRuntime(options) {
         request.inputs.push({ artifactId: reference.artifactId, status: "unavailable", code: safeAgentError(error).code });
       }
     }
-    const result = parseAgentBridgeResult(await invoke(request, { signal }), { taskId: task.taskId, validateBytes });
+    let broker;
+    let result;
+    try {
+      if (task.remoteTask) {
+        const currentCapabilities = await taskClient.getCapabilities();
+        request.capabilities.channel = { features: currentCapabilities.features, operations: currentCapabilities.operations,
+          limits: currentCapabilities.limits, taskRequired: currentCapabilities.taskRequired };
+        broker = await createTaskToolBroker(taskClient, { signal, capabilities: currentCapabilities });
+        request.toolSession = broker.descriptor;
+        request.capabilities.taskTools = true;
+      }
+      result = parseAgentBridgeResult(await invoke(request, { signal, toolEnvironment: broker?.environment }), { taskId: task.taskId, validateBytes });
+    } finally { broker?.close(); }
     taskCheckCancelled(signal);
     const artifacts = [];
     let total = 0;
@@ -2366,7 +2965,7 @@ export function createAgentTaskRuntime(options) {
         artifact = await resolveMedia(descriptor.url, { signal });
         taskCheckCancelled(signal);
         if (descriptor.fileName) artifact.fileName = descriptor.fileName;
-      } else if (descriptor.source === "artifact") artifact = await readArtifact(descriptor.artifactId, conversation.id, context, signal);
+      } else if (descriptor.source === "artifact") artifact = await readArtifact(descriptor.artifactId, conversation.id, context, signal, 10 * 1024 * 1024, taskClient);
       validateBytes?.(artifact.bytes, artifact.mimeType, { source: descriptor.source === "https" ? "https" : "inline" });
       total += artifact.bytes.length;
       if (total > 50 * 1024 * 1024 || usedBytes() + artifact.bytes.length > maxBytes) throw new AgentRuntimeError("artifact.storage_limit");
@@ -2387,11 +2986,12 @@ export function createAgentTaskRuntime(options) {
       }
       throw error;
     }
-    task.text = result.text; task.artifacts = artifacts; task.generated = true;
+    task.text = result.text; task.content = result.content; task.artifacts = artifacts; task.generated = true;
     setState(task, "generated");
   }
 
   async function publish(task, signal) {
+    const taskClient = activeTaskClient(task);
     for (let index = 0; index < task.artifacts.length; index += 1) {
       const artifact = task.artifacts[index];
       if (artifact.messageId) continue;
@@ -2399,7 +2999,7 @@ export function createAgentTaskRuntime(options) {
       const authorization = await authorize(task);
       taskCheckCancelled(signal);
       if (artifact.source?.kind === "artifact") {
-        const current = await readArtifact(artifact.source.artifactId, task.event.conversationId, authorization.context, signal);
+        const current = await readArtifact(artifact.source.artifactId, task.event.conversationId, authorization.context, signal, 10 * 1024 * 1024, taskClient);
         if (taskDigest(current.bytes) !== artifact.sha256) throw new AgentRuntimeError("artifact.integrity_failed");
       }
       if (!artifact.attachmentId) {
@@ -2407,12 +3007,12 @@ export function createAgentTaskRuntime(options) {
         const bytes = taskReadFile(blobPath(artifact.artifactId), 25 * 1024 * 1024);
         if (taskDigest(bytes) !== artifact.sha256) throw new AgentRuntimeError("artifact.integrity_failed");
         setState(task, "uploading");
-        if (typeof client.reserveUpload === "function" && typeof client.getUploadStatus === "function") {
+        if (typeof taskClient.reserveUpload === "function" && typeof taskClient.getUploadStatus === "function") {
           if (!artifact.uploadId) {
             artifact.state = "reserving"; persist();
             let reservationRejected = false;
             try {
-              const reserved = await client.reserveUpload({ conversationId: task.event.conversationId,
+              const reserved = await taskClient.reserveUpload({ conversationId: task.event.conversationId,
                 fileName: artifact.fileName, mimeType: artifact.mimeType, byteSize: artifact.byteSize });
               // Quota rejection is a successful gateway response with no upload ID.
               if (reserved?.upload?.status === "rejected") {
@@ -2434,7 +3034,7 @@ export function createAgentTaskRuntime(options) {
             taskCheckCancelled(signal);
             artifact.state = "completing"; persist();
             try {
-              const complete = await client.completeUploadContent(artifact.uploadId, bytes, artifact.mimeType);
+              const complete = await taskClient.completeUploadContent(artifact.uploadId, bytes, artifact.mimeType);
               const receipt = complete?.attachment || complete?.upload?.attachment;
               if (receipt?.id) { artifact.attachmentId = receipt.id; artifact.state = "uploaded"; persist(); }
               else { artifact.state = "checking"; persist(); }
@@ -2451,7 +3051,7 @@ export function createAgentTaskRuntime(options) {
           }
           taskCheckCancelled(signal);
           if (!artifact.attachmentId) {
-            const status = await client.getUploadStatus(artifact.uploadId);
+            const status = await taskClient.getUploadStatus(artifact.uploadId);
             if (status?.upload?.status === "completed" && status.upload.attachment?.id) {
               artifact.attachmentId = status.upload.attachment.id; artifact.state = "uploaded"; persist();
             } else if (status?.upload?.status === "failed") throw new AgentRuntimeError("upload.failed");
@@ -2461,7 +3061,7 @@ export function createAgentTaskRuntime(options) {
           // Older custom clients cannot reconcile a lost one-step upload receipt.
           artifact.state = "uploading"; persist();
           try {
-            const uploaded = await client.uploadFile({ conversationId: task.event.conversationId, bytes,
+            const uploaded = await taskClient.uploadFile({ conversationId: task.event.conversationId, bytes,
               fileName: artifact.fileName, mimeType: artifact.mimeType,
               clientMessageId: `artifact-${artifact.artifactId}`, idempotencyKey: `artifact-${artifact.artifactId}` });
             if (typeof uploaded?.attachment?.id !== "string" || !uploaded.attachment.id) throw new AgentRuntimeError("upload.outcome_unknown");
@@ -2478,9 +3078,9 @@ export function createAgentTaskRuntime(options) {
       if (signal.aborted) throw new AgentRuntimeError("task.cancelled");
       setState(task, "sending");
       const text = index === 0 ? task.text : "";
-      const sent = await client.sendMessage({ conversationId: task.event.conversationId,
+      const sent = await taskClient.sendMessage({ conversationId: task.event.conversationId,
         content: { format: "duallane.message+json;v=1", plainText: text,
-          blocks: [...(text ? [{ type: "text", text }] : []), { type: "attachment", attachmentId: artifact.attachmentId }] },
+          blocks: [...(index === 0 && task.content ? task.content.blocks : (text ? [{ type: "text", text }] : [])), { type: "attachment", attachmentId: artifact.attachmentId }] },
         replyToMessageId: task.triggerMessageId || undefined,
         clientMessageId: `publish-${artifact.artifactId}`, idempotencyKey: `publish-${artifact.artifactId}` });
       if (!sent?.message?.id) throw new AgentRuntimeError("send.invalid_receipt", { retryable: true });
@@ -2489,7 +3089,8 @@ export function createAgentTaskRuntime(options) {
     }
     if (!task.artifacts.length && !task.messageId) {
       await authorize(task); taskCheckCancelled(signal); setState(task, "sending");
-      const sent = await client.sendMessage({ conversationId: task.event.conversationId, text: task.text,
+      const sent = await taskClient.sendMessage({ conversationId: task.event.conversationId, text: task.text,
+        content: task.content,
         replyToMessageId: task.triggerMessageId || undefined,
         clientMessageId: `reply-${task.taskId}`, idempotencyKey: `reply-${task.taskId}` });
       if (!sent?.message?.id) throw new AgentRuntimeError("send.invalid_receipt", { retryable: true });
@@ -2508,23 +3109,26 @@ export function createAgentTaskRuntime(options) {
     try {
       await authorize(task);
       const error = task.error;
-      const result = await client.sendMessage({ conversationId: task.event.conversationId,
+      const result = await activeTaskClient(task).sendMessage({ conversationId: task.event.conversationId,
         text: `请求未完成（阶段：${error.stage}；错误：${error.code}）。已成功发送的附件会保留。请联系机器人管理员重试任务 ${task.taskId}。`,
         replyToMessageId: task.triggerMessageId || task.event.payload?.messageId || undefined,
         clientMessageId: `failure-${task.taskId}-${task.generation || 0}`, idempotencyKey: `failure-${task.taskId}-${task.generation || 0}` });
       if (result?.message?.id) { task.failureNotified = true; persist(); }
     } catch (error) {
       if (!safeAgentError(error).retryable) { task.notificationAttempts = 3; persist(); }
+    } finally {
+      if (!running.has(task.taskId)) { scopedClients.get(task.taskId)?.close(); scopedClients.delete(task.taskId); }
     }
   }
 
   async function execute(task, controller) {
     task.attempts += 1; task.error = null; setState(task, "running");
-    let stopThinking = () => {};
+    let stopThinking = () => {}, stopWatching = () => {};
     try {
       const authorization = await authorize(task);
       taskCheckCancelled(controller.signal);
-      stopThinking = taskStartThinking(client, task.event.conversationId, controller.signal);
+      stopWatching = watchRemoteTask(task, controller);
+      stopThinking = taskStartThinking(authorization.client, task.event.conversationId, controller.signal);
       if (!task.generated) await generate(task, authorization, controller.signal);
       if (controller.signal.aborted) throw new AgentRuntimeError("task.cancelled");
       await publish(task, controller.signal);
@@ -2536,13 +3140,22 @@ export function createAgentTaskRuntime(options) {
       if (safe.retryable && task.attempts < maxAttempts && safe.code !== "upload.outcome_unknown") {
         setState(task, "received", { error: safe, nextAttemptAt: now() + retryDelayMs * 2 ** (task.attempts - 1) });
       } else { setState(task, "failed", { error: safe }); await failureReceipt(task); }
-    } finally { stopThinking(); }
+    } finally {
+      stopThinking(); stopWatching();
+      scopedClients.get(task.taskId)?.close(); scopedClients.delete(task.taskId);
+    }
   }
 
   function control(taskId, action) {
     const task = tasks.find((item) => item.taskId === taskId);
     if (!task || task.expiresAt <= now()) throw new AgentRuntimeError("task.not_found");
     if (action === "cancel") {
+      if (task.remoteTask && typeof client.cancelAgentTask === "function") {
+        task.remoteCancellationPending = true; persist();
+        const cancellation = Promise.resolve().then(() => client.cancelAgentTask(task.remoteTask.id, { signal: AbortSignal.timeout(5000), timeoutMs: 5000 }))
+          .then(() => { task.remoteCancellationPending = false; persist(); }).catch(() => {});
+        remoteControls.add(cancellation); cancellation.finally(() => remoteControls.delete(cancellation));
+      }
       if (running.has(taskId)) running.get(taskId).controller.abort();
       else if (!TASK_TERMINAL.has(task.state)) setState(task, "cancelled");
       return;
@@ -2632,6 +3245,8 @@ export function createAgentTaskRuntime(options) {
       for (const { controller } of running.values()) controller.abort();
       await Promise.allSettled([...running.values()].map((slot) => slot.promise));
       await Promise.allSettled([...notifying.values()]);
+      await Promise.allSettled([...remoteControls]);
+      for (const scoped of scopedClients.values()) scoped.close(); scopedClients.clear();
       releaseOwner();
       for (const waiter of waiters.splice(0)) waiter();
     },
@@ -2922,11 +3537,21 @@ export class DualLaneBotV2 {
   }
 
   getMe() { return this.#client.getMe(); }
+  getCapabilities(conversationId) { return this.#client.getCapabilities(conversationId); }
+  createTask(input) { return this.#client.createTask(input); }
+  getTask(taskId) { return this.#client.getTask(taskId); }
+  cancelAgentTask(taskId) { return this.#client.cancelAgentTask(taskId); }
+  getOperation(taskId, operation, key) { return this.#client.getOperation(taskId, operation, key); }
+  forTask(task, options) { return this.#client.forTask(task, options); }
+  getMessage(messageId, options) { return this.#client.getMessage(messageId, options); }
+  listHistory(conversationId, options) { return this.#client.listHistory(conversationId, options); }
+  searchMessages(conversationId, options) { return this.#client.searchMessages(conversationId, options); }
+  listMembers(conversationId) { return this.#client.listMembers(conversationId); }
   listConversations() { return this.#client.listConversations(); }
   getContext(conversationId, limit = 50) { return this.#client.getContext(conversationId, { limit }); }
   getUpdates(afterSequence = 0, limit = 50) { return this.#client.getUpdates({ afterSequence, limit }); }
   sendMessage(conversationId, text, options = {}) { return this.#client.sendMessage({ ...options, conversationId, text }); }
-  editMessage(messageId, plainText) { return this.#client.editMessage(messageId, plainText); }
+  editMessage(messageId, input, options) { return this.#client.editMessage(messageId, input, options); }
   sendFile(conversationId, bytes, fileName, options = {}) { return this.#client.sendFile({ ...options, conversationId, bytes, fileName }); }
   readAttachment(input) { return this.#client.readAttachment(input); }
   sendCard(conversationId, cardDoc, options = {}) { return this.#client.sendCard({ ...options, conversationId, card: cardDoc }); }
@@ -3183,7 +3808,6 @@ export function deleteAgentProfile(profile = "default", options = {}) {
 // --- src/mcp.js ---
 const SUPPORTED_PROTOCOL_VERSIONS = new Set(["2025-06-18", "2025-03-26", "2024-11-05"]);
 const DEFAULT_MCP_PROTOCOL_VERSION = "2024-11-05";
-const ALLOWED_CARD_ACTIONS = new Set(["confirm", "cancel", "submit", "refresh"]);
 
 export const DUALLANE_MCP_TOOLS = [
   {
@@ -3275,6 +3899,7 @@ export const DUALLANE_MCP_TOOLS = [
     inputSchema: {
       type: "object",
       properties: {
+        taskId: { type: "string" },
         conversationId: { type: "string", description: "Target DualLane conversation ID (conv_...)." },
         limit: { type: "integer", minimum: 1, maximum: 200, description: "Max messages to fetch (default: 30)." },
         profile: { type: "string", description: "Local credential profile name (default: 'default')." },
@@ -3290,10 +3915,12 @@ export const DUALLANE_MCP_TOOLS = [
       properties: {
         conversationId: { type: "string", description: "Target DualLane conversation ID (conv_...)." },
         text: { type: "string", description: "Message text (supports Markdown)." },
+        content: AGENT_MESSAGE_CONTENT_SCHEMA,
+        taskId: { type: "string", description: "Server task ID; required for task-authorized conversations." },
         replyToMessageId: { type: "string", description: "Optional message ID (msg_...) to reply to." },
         profile: { type: "string", description: "Local credential profile name (default: 'default')." },
       },
-      required: ["conversationId", "text"],
+      required: ["conversationId"],
     },
   },
   {
@@ -3303,11 +3930,14 @@ export const DUALLANE_MCP_TOOLS = [
     inputSchema: {
       type: "object",
       properties: {
+        taskId: { type: "string" },
         messageId: { type: "string", description: "Message ID (msg_...) previously returned by duallane_send_message." },
         plainText: { type: "string", description: "Updated message text." },
+        content: AGENT_MESSAGE_CONTENT_SCHEMA,
+        expectedVersion: { type: "string", minLength: 64, maxLength: 64, description: "Current message.version for a task edit. A conflict is never refreshed automatically." },
         profile: { type: "string", description: "Local credential profile name (default: 'default')." },
       },
-      required: ["messageId", "plainText"],
+      required: ["messageId"],
     },
   },
   {
@@ -3317,6 +3947,7 @@ export const DUALLANE_MCP_TOOLS = [
     inputSchema: {
       type: "object",
       properties: {
+        taskId: { type: "string", description: "Server task ID for task-authorized destinations; local file paths are operator-only." },
         conversationId: { type: "string", description: "Target DualLane conversation ID (conv_...)." },
         filePath: { type: "string", description: "Local path to the file to upload (provide filePath, contentText, or contentBase64)." },
         contentText: { type: "string", description: "Inline UTF-8 file text when generating text/markdown/csv/svg/code without writing to disk." },
@@ -3337,6 +3968,7 @@ export const DUALLANE_MCP_TOOLS = [
     inputSchema: {
       type: "object",
       properties: {
+        taskId: { type: "string" },
         conversationId: { type: "string", description: "Target DualLane conversation ID (conv_...)." },
         title: { type: "string", description: "Card header title." },
         markdown: { type: "string", description: "Main Markdown body of the card." },
@@ -3412,6 +4044,7 @@ export const DUALLANE_MCP_TOOLS = [
     inputSchema: {
       type: "object",
       properties: {
+        taskId: { type: "string" },
         conversationId: { type: "string", description: "Target DualLane conversation ID (conv_...)." },
         state: {
           type: "string",
@@ -3464,6 +4097,14 @@ export const DUALLANE_MCP_TOOLS = [
       },
     },
   },
+  { name: "duallane_begin_task", description: "Operator: establish a server-authorized task for an exact delivered event. Never use a chat-supplied actor identity.",
+    inputSchema: { type: "object", properties: { eventId: { type: "string" }, profile: { type: "string" } }, required: ["eventId"] } },
+  { name: "duallane_cancel_task", description: "Operator: cancel further work in a server task chain. This does not withdraw published messages.",
+    inputSchema: { type: "object", properties: { taskId: { type: "string" }, profile: { type: "string" } }, required: ["taskId"] } },
+  ...DUALLANE_TASK_TOOLS.filter((tool) => !["duallane_send_message", "duallane_edit_message", "duallane_send_card"].includes(tool.name)).map((tool) => ({ ...tool,
+    description: `${tool.description} Operator entry requires an existing taskId; group adapters use mcp --task.`,
+    inputSchema: { ...tool.inputSchema, properties: { ...tool.inputSchema.properties, taskId: { type: "string" }, profile: { type: "string" } },
+      required: [...tool.inputSchema.required, ...(tool.name === "duallane_capabilities" ? [] : ["taskId"])] } })),
 ];
 
 export function createDualLaneMcpServer(options = {}) {
@@ -3493,6 +4134,20 @@ export function createDualLaneMcpServer(options = {}) {
 
   async function callTool(name, args = {}) {
     const profileName = normalizeProfileName(args.profile || defaultProfile);
+
+    if (name === "duallane_begin_task") return makeClient(profileName).client.createTask({ eventId: args.eventId });
+    if (name === "duallane_cancel_task") return makeClient(profileName).client.cancelAgentTask(args.taskId);
+    if (DUALLANE_TASK_TOOLS.some((tool) => tool.name === name) && !["duallane_send_message", "duallane_edit_message", "duallane_send_card"].includes(name)) {
+      const { client } = makeClient(profileName);
+      if (name === "duallane_capabilities" && !args.taskId) return client.getCapabilities();
+      if (typeof args.taskId !== "string" || !args.taskId) throw new DualLaneAgentError("task.context_required", "An existing server task is required");
+      const record = await client.getTask(args.taskId);
+      const scoped = client.forTask(record.task);
+      const input = { ...args }; delete input.taskId; delete input.profile;
+      const operationId = "operator-" + crypto.createHash("sha256").update(JSON.stringify([name, input])).digest("hex");
+      try { return await createTaskToolServer(scoped).callTool(name, input, operationId); }
+      finally { scoped.close(); }
+    }
 
     switch (name) {
       case "duallane_setup_start": {
@@ -3678,21 +4333,29 @@ export function createDualLaneMcpServer(options = {}) {
       case "duallane_get_context": {
         const { client } = makeClient(profileName);
         const limit = args.limit === undefined ? 30 : Number(args.limit);
-        return await client.getContext(args.conversationId, { limit });
+        const scoped = args.taskId ? client.forTask((await client.getTask(args.taskId)).task) : client;
+        try { return await scoped.getContext(args.conversationId, { limit }); }
+        finally { if (scoped !== client) scoped.close(); }
       }
 
       case "duallane_send_message": {
         const { client } = makeClient(profileName);
-        return await client.sendMessage({
+        const scoped = args.taskId ? client.forTask((await client.getTask(args.taskId)).task) : client;
+        try { return await scoped.sendMessage({
           conversationId: args.conversationId,
           text: args.text,
+          content: args.content,
           replyToMessageId: args.replyToMessageId,
-        });
+        }); } finally { if (scoped !== client) scoped.close(); }
       }
 
       case "duallane_edit_message": {
         const { client } = makeClient(profileName);
-        return await client.editMessage(args.messageId, args.plainText);
+        const scoped = args.taskId ? client.forTask((await client.getTask(args.taskId)).task) : client;
+        const input = args.taskId || args.content !== undefined || args.expectedVersion !== undefined
+          ? { plainText: args.plainText, content: args.content, expectedVersion: args.expectedVersion } : args.plainText;
+        try { return await scoped.editMessage(args.messageId, input); }
+        finally { if (scoped !== client) scoped.close(); }
       }
 
       case "duallane_send_file": {
@@ -3720,60 +4383,26 @@ export function createDualLaneMcpServer(options = {}) {
           typeof args.mimeType === "string" && args.mimeType.trim()
             ? args.mimeType.trim()
             : inferMimeTypeFromFileName(resolvedName);
-        return await client.sendFile({
+        const scoped = args.taskId ? client.forTask((await client.getTask(args.taskId)).task) : client;
+        try { return await scoped.sendFile({
           conversationId: args.conversationId,
           bytes: rawBytes,
           fileName: resolvedName,
           mimeType,
           text: args.text,
           replyToMessageId: args.replyToMessageId,
-        });
+        }); } finally { if (scoped !== client) scoped.close(); }
       }
 
       case "duallane_send_card": {
         const { client } = makeClient(profileName);
-        const elements = [
-          {
-            tag: "markdown",
-            content: String(args.markdown || ""),
-          },
-        ];
-        if (Array.isArray(args.buttons) && args.buttons.length > 0) {
-          const seen = new Set();
-          const actions = [];
-          for (const btn of args.buttons.slice(0, 4)) {
-            const actionId = String(btn?.actionId || "").trim();
-            if (!ALLOWED_CARD_ACTIONS.has(actionId) || seen.has(actionId)) {
-              throw new TypeError(`Card button actionId must be unique and one of: confirm, cancel, submit, refresh (got "${actionId}")`);
-            }
-            seen.add(actionId);
-            actions.push({
-              tag: "button",
-              text: { tag: "plain_text", content: String(btn.label || actionId) },
-              type: btn.style === "primary" || btn.style === "danger" ? btn.style : "default",
-              value: {
-                action: actionId,
-                ...(btn.value && typeof btn.value === "object" && !Array.isArray(btn.value) ? btn.value : {}),
-              },
-            });
-          }
-          if (actions.length > 0) {
-            elements.push({ tag: "hr" });
-            elements.push({ tag: "action", actions });
-          }
-        }
-        const card = {
-          header: {
-            title: { tag: "plain_text", content: String(args.title || "通知卡片") },
-            template: args.tone || "blue",
-          },
-          elements,
-        };
-        return await client.sendFeishuCard({
+        const card = buildAgentInteractiveCard(args);
+        const scoped = args.taskId ? client.forTask((await client.getTask(args.taskId)).task) : client;
+        try { return await scoped.sendFeishuCard({
           conversationId: args.conversationId,
           fallbackText: String(args.fallbackText || args.title || "交互卡片"),
           card,
-        });
+        }); } finally { if (scoped !== client) scoped.close(); }
       }
 
       case "duallane_wait_for_event": {
@@ -3877,7 +4506,9 @@ export function createDualLaneMcpServer(options = {}) {
 
       case "duallane_set_typing": {
         const { client } = makeClient(args.profile);
-        return await client.setTyping(args.conversationId, { state: args.state || "thinking" });
+        const scoped = args.taskId ? client.forTask((await client.getTask(args.taskId)).task) : client;
+        try { return await scoped.setTyping(args.conversationId, { state: args.state || "thinking" }); }
+        finally { if (scoped !== client) scoped.close(); }
       }
 
       case "duallane_doctor": {
@@ -4020,6 +4651,7 @@ export function createDualLaneMcpServer(options = {}) {
               code: toolErr?.code || "tool.execution_failed",
               message: redactSecrets(toolErr?.message || String(toolErr)),
               statusCode: toolErr?.statusCode || null,
+              ...(safeAgentOperationReference(toolErr?.operation) ? { operation: safeAgentOperationReference(toolErr.operation) } : {}),
             };
             return {
               jsonrpc: "2.0",
@@ -4060,12 +4692,13 @@ export function createDualLaneMcpServer(options = {}) {
 }
 
 export function startDualLaneMcpStdioServer(options = {}) {
-  const server = createDualLaneMcpServer(options);
+  const server = options.server ?? createDualLaneMcpServer(options);
   const input = options.stdin || process.stdin;
   const output = options.stdout || process.stdout;
 
   let buffer = Buffer.alloc(0);
   let framingMode = null; // "newline" | "content-length"
+  const maxInputBytes = options.maxInputBytes ?? 80 * 1024 * 1024;
 
   function sendResponse(payload) {
     if (!payload) return;
@@ -4103,6 +4736,11 @@ export function startDualLaneMcpStdioServer(options = {}) {
 
   input.on("data", (chunk) => {
     const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, "utf8");
+    if (buffer.length + buf.length > maxInputBytes) {
+      buffer = Buffer.alloc(0);
+      sendResponse({ jsonrpc: "2.0", id: null, error: { code: -32600, message: "MCP request exceeds the input limit" } });
+      input.pause(); input.destroy?.(); return;
+    }
     buffer = buffer.length === 0 ? buf : Buffer.concat([buffer, buf]);
 
     while (buffer.length > 0) {
@@ -4122,6 +4760,11 @@ export function startDualLaneMcpStdioServer(options = {}) {
           continue;
         }
         const length = Number(match[1]);
+        if (!Number.isSafeInteger(length) || length > maxInputBytes) {
+          buffer = Buffer.alloc(0);
+          sendResponse({ jsonrpc: "2.0", id: null, error: { code: -32600, message: "MCP request exceeds the input limit" } });
+          input.pause(); input.destroy?.(); return;
+        }
         const bodyStart = headerEnd + 4;
         if (buffer.length < bodyStart + length) return;
         const bodyText = buffer.subarray(bodyStart, bodyStart + length).toString("utf8");
@@ -4397,7 +5040,7 @@ export async function restartInstalledDaemons({ configDir, quiet = true } = {}) 
   return restarted;
 }
 
-export async function invokeDaemonAgentTurn({ customCmd, workdir, request, signal, timeoutMs = 300_000 }) {
+export async function invokeDaemonAgentTurn({ customCmd, workdir, request, signal, toolEnvironment, timeoutMs = 300_000 }) {
   if (!customCmd) throw new TypeError("Resident daemons require --cmd <command>; no agent executable is selected automatically.");
   const input = JSON.stringify(request);
   if (Buffer.byteLength(input) > 16 * 1024 * 1024) throw new AgentRuntimeError("bridge.input_limit");
@@ -4407,6 +5050,12 @@ export async function invokeDaemonAgentTurn({ customCmd, workdir, request, signa
     delete env.DUALLANE_BOT_TOKEN;
     delete env.DUALLANE_TOKEN;
     delete env.DUALLANE_MESSAGE_TEXT;
+    delete env.DUALLANE_TASK_BROKER_URL;
+    delete env.DUALLANE_TASK_BROKER_KEY;
+    if (toolEnvironment) {
+      env.DUALLANE_TASK_BROKER_URL = toolEnvironment.DUALLANE_TASK_BROKER_URL;
+      env.DUALLANE_TASK_BROKER_KEY = toolEnvironment.DUALLANE_TASK_BROKER_KEY;
+    }
     env.DUALLANE_CONVERSATION_ID = String(request.event.conversationId);
     env.DUALLANE_EVENT_TYPE = String(request.event.type || "");
     const child = spawn(customCmd, { cwd: workdir, shell: true, windowsHide: true,
@@ -4511,7 +5160,7 @@ export async function runResidentDaemon(flags = {}) {
     prepareInputs: prepareAgentInputs,
     validateBytes: validateArtifactBytes,
     resolveMedia: createDaemonMediaResolver({ enabled: allowPublicMedia, dnsServers: mediaDnsServers }),
-    invoke: (request, { signal }) => invokeDaemonAgentTurn({ customCmd, workdir, request, signal }),
+    invoke: (request, { signal, toolEnvironment }) => invokeDaemonAgentTurn({ customCmd, workdir, request, signal, toolEnvironment }),
     onState(summary) {
       updateRecord({ taskSummary: summary });
       if (pendingRestart && summary.pending === 0 && summary.active === 0) void shutdown();
@@ -4966,13 +5615,23 @@ Usage:
   duallane-agent daemon run --cmd <command> [--allow-public-media] [--media-dns-servers 1.1.1.1,8.8.8.8]
   duallane-agent daemon <install|start|stop|restart|uninstall|status|logs|run> --cmd <command> [--agent auto|cmd] [--workdir <dir>] [--profile default]
   duallane-agent mcp [--profile default]
+  duallane-agent mcp --task
+  duallane-agent capabilities [conversationId] [--task-id <id>] [--profile default]
+  duallane-agent task <begin|status|cancel> <event-or-task-id> [--profile default]
+  duallane-agent history [conversationId] --task-id <id> [--before <cursor>] [--limit 12]
+  duallane-agent search [conversationId] --task-id <id> --query <text> [--author <memberId>] [--start-time <RFC3339>] [--end-time <RFC3339>]
+  duallane-agent get-message <messageId> --task-id <id>
+  duallane-agent members [conversationId] --task-id <id>
+  duallane-agent operation <taskId> <operation> <key> [--profile default]
+  duallane-agent send-card <conversationId> --card-json <fixed-action-card> [--task-id <id>]
+  duallane-agent update-card <cardId> --card-json <fixed-action-card> --expected-revision <n> --task-id <id>
   duallane-agent status [--profile default]
   duallane-agent conversations [--profile default]
   duallane-agent updates [--ack] [--timeout 20] [--profile default]
   duallane-agent wait [--timeout 3600] [--transport auto|ws|poll] [--profile default]
-  duallane-agent send <conversationId> <text> [--reply-to <messageId>] [--profile default]
-  duallane-agent send-file <conversationId> <filePath> [--name <fileName>] [--mime <mimeType>] [--text <caption>] [--reply-to <messageId>] [--profile default]
-  duallane-agent edit <messageId> <text> [--profile default]
+  duallane-agent send <conversationId> [text] [--content-json <structured-content>] [--task-id <id>] [--reply-to <messageId>] [--profile default]
+  duallane-agent send-file <conversationId> <filePath> [--task-id <id>] [--name <fileName>] [--mime <mimeType>] [--text <caption>] [--reply-to <messageId>] [--profile default]
+  duallane-agent edit <messageId> [text] [--content-json <content>] [--expected-version <version>] [--task-id <id>] [--profile default]
   duallane-agent typing <conversationId> [--state thinking|typing] [--profile default]
   duallane-agent publish-mobile <apkPath> [--min-native-code <code>] [--title <title>] [--notes <md> | --notes-file <file>] [--profile default]
   duallane-agent publish-mobile-ota <wwwDirOrZip> --version <semver> [--min-native-code <code>] [--title <title>] [--notes <md> | --notes-file <file>] [--profile default]
@@ -5193,7 +5852,69 @@ async function main() {
   }
 
   if (subcommand === "mcp") {
-    startDualLaneMcpStdioServer({ defaultProfile: flags.profile || "default" });
+    if (flags.task) {
+      const server = createTaskBrokerMcpAdapter();
+      delete process.env.DUALLANE_TASK_BROKER_URL;
+      delete process.env.DUALLANE_TASK_BROKER_KEY;
+      startDualLaneMcpStdioServer({ server, maxInputBytes: 128 * 1024 });
+    } else {
+      if (process.env.DUALLANE_TASK_BROKER_URL || process.env.DUALLANE_TASK_BROKER_KEY) throw new Error("Task adapters must use mcp --task; operator profiles are unavailable.");
+      startDualLaneMcpStdioServer({ defaultProfile: flags.profile || "default" });
+    }
+    return;
+  }
+
+  if (subcommand === "operation") {
+    const [taskId, operation, key] = positionals.slice(1);
+    if (!taskId || !operation || !key) throw new Error("Usage: duallane-agent operation <taskId> <operation> <key>");
+    const { client } = requireClient(flags.profile);
+    const scoped = client.forTask((await client.getTask(taskId)).task);
+    try { process.stdout.write(JSON.stringify(await scoped.getOperation(operation, key), null, 2) + "\n"); }
+    finally { scoped.close(); }
+    return;
+  }
+
+  if (subcommand === "send-card" || subcommand === "update-card") {
+    const [target] = positionals.slice(1);
+    if (!target || typeof flags["card-json"] !== "string") throw new Error("Card operations require an object ID and --card-json.");
+    if (subcommand === "update-card" && typeof flags["task-id"] !== "string") throw new Error("update-card requires --task-id; legacy operator card updates are not exposed by this command.");
+    const cardInput = JSON.parse(flags["card-json"]), card = buildAgentInteractiveCard(cardInput);
+    const { client } = requireClient(flags.profile);
+    const scoped = flags["task-id"] ? client.forTask((await client.getTask(flags["task-id"])).task) : client;
+    try {
+      const result = subcommand === "update-card" ? await scoped.updateFeishuCard(target, { card, expectedRevision: Number(flags["expected-revision"]), fallbackText: cardInput.fallbackText || cardInput.title })
+        : await scoped.sendFeishuCard({ conversationId: target, card, fallbackText: cardInput.fallbackText || cardInput.title });
+      process.stdout.write(JSON.stringify(result, null, 2) + "\n");
+    } finally { if (scoped !== client) scoped.close(); }
+    return;
+  }
+
+  if (["capabilities", "task", "history", "search", "get-message", "members"].includes(subcommand)) {
+    const { client } = requireClient(flags.profile);
+    if (subcommand === "task") {
+      const [action, id] = positionals.slice(1);
+      if (!id || !["begin", "status", "cancel"].includes(action)) throw new Error("Usage: duallane-agent task begin <eventId> | status <taskId> | cancel <taskId>");
+      const result = action === "begin" ? await client.createTask({ eventId: id }) : action === "cancel" ? await client.cancelAgentTask(id) : await client.getTask(id);
+      process.stdout.write(JSON.stringify(result, null, 2) + "\n"); return;
+    }
+    if (subcommand === "capabilities" && !flags["task-id"]) {
+      process.stdout.write(JSON.stringify(await client.getCapabilities(positionals[1]), null, 2) + "\n"); return;
+    }
+    if (typeof flags["task-id"] !== "string") throw new Error("This operation requires --task-id <server-task-id>.");
+    const scoped = client.forTask((await client.getTask(flags["task-id"])).task);
+    try {
+      const history = {};
+      for (const [flag, field] of [["before", "before"], ["query", "query"], ["author", "authorId"], ["start-time", "startTime"], ["end-time", "endTime"]]) {
+        if (flags[flag] !== undefined) history[field] = flags[flag];
+      }
+      if (flags.limit !== undefined) history.limit = Number(flags.limit);
+      const result = subcommand === "capabilities" ? await scoped.getCapabilities()
+        : subcommand === "get-message" ? await scoped.getMessage(positionals[1])
+          : subcommand === "members" ? await scoped.listMembers(positionals[1] || scoped.task.conversationId)
+            : subcommand === "search" ? await scoped.searchMessages(positionals[1] || scoped.task.conversationId, history)
+              : await scoped.listHistory(positionals[1] || scoped.task.conversationId, history);
+      process.stdout.write(JSON.stringify(result, null, 2) + "\n");
+    } finally { scoped.close(); }
     return;
   }
 
@@ -5406,15 +6127,19 @@ async function main() {
   if (subcommand === "send") {
     const [conversationId, ...rest] = positionals.slice(1);
     const text = rest.join(" ").trim();
-    if (!conversationId || !text) {
+    const content = typeof flags["content-json"] === "string" ? buildMessageContent(JSON.parse(flags["content-json"])) : undefined;
+    if (!conversationId || (!text && !content)) {
       throw new Error("Usage: duallane-agent send <conversationId> <text> [--reply-to <msgId>]");
     }
     const { client } = requireClient(flags.profile);
-    const res = await client.sendMessage({
+    const scoped = flags["task-id"] ? client.forTask((await client.getTask(flags["task-id"])).task) : client;
+    let res;
+    try { res = await scoped.sendMessage({
       conversationId,
       text,
+      content,
       replyToMessageId: typeof flags["reply-to"] === "string" ? flags["reply-to"] : undefined,
-    });
+    }); } finally { if (scoped !== client) scoped.close(); }
     process.stdout.write(JSON.stringify(res, null, 2) + "\n");
     return;
   }
@@ -5435,14 +6160,16 @@ async function main() {
         ? flags.mime.trim()
         : inferMimeTypeFromFileName(fileName);
     const { client } = requireClient(flags.profile);
-    const res = await client.sendFile({
+    const scoped = flags["task-id"] ? client.forTask((await client.getTask(flags["task-id"])).task) : client;
+    let res;
+    try { res = await scoped.sendFile({
       conversationId,
       bytes,
       fileName,
       mimeType,
       text: typeof flags.text === "string" ? flags.text : undefined,
       replyToMessageId: typeof flags["reply-to"] === "string" ? flags["reply-to"] : undefined,
-    });
+    }); } finally { if (scoped !== client) scoped.close(); }
     process.stdout.write(JSON.stringify(res, null, 2) + "\n");
     return;
   }
@@ -5450,11 +6177,16 @@ async function main() {
   if (subcommand === "edit") {
     const [messageId, ...rest] = positionals.slice(1);
     const text = rest.join(" ").trim();
-    if (!messageId || !text) {
+    const content = typeof flags["content-json"] === "string" ? buildMessageContent(JSON.parse(flags["content-json"])) : undefined;
+    if (!messageId || (!text && !content)) {
       throw new Error("Usage: duallane-agent edit <messageId> <text> [--profile default]");
     }
     const { client } = requireClient(flags.profile);
-    const res = await client.editMessage(messageId, text);
+    const scoped = flags["task-id"] ? client.forTask((await client.getTask(flags["task-id"])).task) : client;
+    let res;
+    const input = flags["task-id"] || content || flags["expected-version"] ? { plainText: text || undefined, content, expectedVersion: flags["expected-version"] } : text;
+    try { res = await scoped.editMessage(messageId, input); }
+    finally { if (scoped !== client) scoped.close(); }
     process.stdout.write(JSON.stringify(res, null, 2) + "\n");
     return;
   }
@@ -5466,7 +6198,10 @@ async function main() {
     }
     const { client } = requireClient(flags.profile);
     const state = flags.state === "typing" ? "typing" : "thinking";
-    const res = await client.setTyping(conversationId, { state });
+    const scoped = flags["task-id"] ? client.forTask((await client.getTask(flags["task-id"])).task) : client;
+    let res;
+    try { res = await scoped.setTyping(conversationId, { state }); }
+    finally { if (scoped !== client) scoped.close(); }
     process.stdout.write(JSON.stringify(res, null, 2) + "\n");
     return;
   }
@@ -5669,6 +6404,8 @@ if (isDirectCli) {
   main().catch((err) => {
     const safeMsg = String(err?.message || err).replace(/dl_bot_[A-Za-z0-9_-]{12,}/gu, "[REDACTED]");
     process.stderr.write(`[DualLane Error] ${safeMsg}\n`);
+    const operation = safeAgentOperationReference(err?.operation);
+    if (operation) process.stderr.write(JSON.stringify({ operation, safeToRetry: false }) + "\n");
     process.exitCode = 1;
   });
 }

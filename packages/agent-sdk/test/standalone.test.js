@@ -75,3 +75,39 @@ test("published standalone parser preserves a multi-megabyte inline PNG", async 
       mimeType: "image/png", encoding: "base64", data: png.toString("base64") }] }), { validateBytes: runtime.validateArtifactBytes });
   assert.deepEqual(result.artifacts[0].bytes, png);
 });
+
+test("standalone task tools and mixed-message builders work without source imports", () => {
+  withBundleFixture((fixture, sdk) => {
+    const built = spawnSync(process.execPath, [path.join(sdk, "scripts/bundle-standalone.mjs")], { encoding: "utf8" });
+    assert.equal(built.status, 0, built.stderr);
+    const runtimeUrl = pathToFileURL(path.join(fixture, publicPath, "duallane-agent.mjs")).href;
+    const code = `import assert from 'node:assert/strict';
+const m = await import(${JSON.stringify(runtimeUrl)});
+const task = {id:'task',conversationId:'conversation',triggerMessageId:'trigger',expiresAt:new Date(Date.now()+60000).toISOString()};
+let checked=false;
+const client = new m.DualLaneAgentClient({url:'https://synthetic.example',token:'dl_bot_'+'a'.repeat(32),fetch:async(url,init)=>{
+const route=new URL(url).pathname;
+if(route==='/api/bot/v2/tasks/task')return new Response(JSON.stringify({task}),{headers:{'content-type':'application/json'}});
+assert.equal(init.headers['x-duallane-task'],'task');checked=true;
+if(route.includes('/operations/'))return new Response(JSON.stringify({status:'unknown',safeToRetry:false}),{headers:{'content-type':'application/json'}});
+if(route.endsWith('/capabilities'))return new Response(JSON.stringify({features:{conditionalMessageEdit:true,taskCardUpdate:true}}),{headers:{'content-type':'application/json'}});
+if(route.includes('/messages/'))return new Response(JSON.stringify({message:{id:'own',conversationId:'conversation',version:'b'.repeat(64)}}),{headers:{'content-type':'application/json'}});
+if(route.includes('/cards/'))return new Response(JSON.stringify({card:{id:'card',revision:2}}),{headers:{'content-type':'application/json'}});
+return new Response(JSON.stringify({members:[{id:'bot-b'}]}),{headers:{'content-type':'application/json'}});
+}});
+const scoped=client.forTask(task);
+try {
+const tools=m.createTaskToolServer(scoped);
+assert.equal((await tools.callTool('duallane_list_members')).members[0].id,'bot-b');
+assert.equal(checked,true);
+const content=m.buildMessageContent([m.messageMention('bot-b','B'),m.messageText('hello')]);
+assert.equal(content.blocks[0].type,'mention');
+assert.equal(m.parseMessageContent(content).complete,true);
+assert.equal((await tools.callTool('duallane_edit_message',{messageId:'own',plainText:'updated'},'edit')).operation.key.length,69);
+assert.equal((await tools.callTool('duallane_update_card',{cardId:'card',expectedRevision:1,title:'Card',markdown:'Body'},'update')).operation.key.length,69);
+assert.equal((await tools.callTool('duallane_query_operation',{operation:'message.send',key:'missing'})).safeToRetry,false);
+} finally {scoped.close();}`;
+    const result = spawnSync(process.execPath, ["--input-type=module", "-e", code], { encoding: "utf8", timeout: 10_000 });
+    assert.equal(result.status, 0, result.stderr);
+  });
+});

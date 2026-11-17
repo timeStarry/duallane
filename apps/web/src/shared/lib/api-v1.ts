@@ -745,6 +745,10 @@ export const apiV1 = {
         body: JSON.stringify(patch),
       }
     ),
+  listConversationBotRequests: (conversationId: string) =>
+    requestJSON<ConversationBotRequestsResponse>(
+      `/api/v1/conversations/${encodeURIComponent(conversationId)}/bot-requests`
+    ),
 
   // Space Governance Console (Owner / Admin only)
   getAdminOverview: () =>
@@ -1330,6 +1334,20 @@ export interface BotGroupPolicy {
   allowContext: boolean;
   contextMaxMessages?: number | null;
   updatedAt?: string;
+}
+
+export interface ConversationBotRequest {
+  botId: string;
+  name: string;
+  status: "pending" | string;
+  allowContext: boolean;
+  maxMessages: number | null;
+}
+
+export interface ConversationBotRequestsResponse {
+  canManage: boolean;
+  requests: ConversationBotRequest[];
+  hasMore: boolean;
 }
 
 export interface BotConversationOverviewItem {

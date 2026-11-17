@@ -181,6 +181,10 @@ func (h *WebSocketHandler) release() {
 }
 
 func (h *WebSocketHandler) ServeHTTP(response http.ResponseWriter, request *http.Request) {
+	if request.Header.Get(AgentTaskHeader) != "" || AgentTaskID(request.Context()) != "" {
+		http.Error(response, "task transport forbidden", http.StatusForbidden)
+		return
+	}
 	if h == nil || h.gateway == nil {
 		http.Error(response, "service unavailable", http.StatusServiceUnavailable)
 		return

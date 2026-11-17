@@ -2,6 +2,7 @@ package bots
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/auth"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/botpolicy"
 )
 
 type pgQueryer interface {
@@ -308,6 +310,7 @@ func getSettings(ctx context.Context, queryer pgQueryer, spaceID, botID string) 
 	var welcome, description, avatar *string
 	var allowDirect, allowGroup, requireApproval, proactive, showCreator int
 	var includeReplies, includeSystemEvents, includeAttachmentMetadata, allowAttachmentPreview, summaryEnabled int
+	var rawAccessPolicy []byte
 	var limits Limits
 	err := queryer.QueryRow(ctx, `
 		SELECT s.bot_id, s.space_id, s.visibility_policy, s.allow_direct, s.allow_group,
@@ -316,6 +319,7 @@ func getSettings(ctx context.Context, queryer pgQueryer, spaceID, botID string) 
 			s.max_context_messages, s.max_context_chars, s.max_context_tokens,
 			s.context_window_seconds, s.include_replies, s.include_system_events,
 			s.include_attachment_metadata, s.allow_attachment_preview, s.long_term_summary_enabled,
+			s.access_policy,
 			s.created_at, s.updated_at,
 			COALESCE(l.requests_per_minute, 30), COALESCE(l.member_daily_requests, 500),
 			COALESCE(l.input_token_limit, 32000), COALESCE(l.output_token_limit, 16000),
@@ -327,7 +331,7 @@ func getSettings(ctx context.Context, queryer pgQueryer, spaceID, botID string) 
 		&record.GroupInviterPolicy, &requireApproval, &proactive, &record.TriggerPolicy, &welcome, &description,
 		&avatar, &showCreator, &record.MaxContextMessages, &record.MaxContextChars, &record.MaxContextTokens,
 		&record.ContextWindowSeconds, &includeReplies, &includeSystemEvents, &includeAttachmentMetadata,
-		&allowAttachmentPreview, &summaryEnabled, &record.CreatedAt, &record.UpdatedAt,
+		&allowAttachmentPreview, &summaryEnabled, &rawAccessPolicy, &record.CreatedAt, &record.UpdatedAt,
 		&limits.RequestsPerMinute, &limits.MemberDailyRequests, &limits.InputTokenLimit, &limits.OutputTokenLimit,
 		&limits.MaxConcurrency, &limits.EventBacklogLimit)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -341,6 +345,16 @@ func getSettings(ctx context.Context, queryer pgQueryer, spaceID, botID string) 
 	record.IncludeReplies, record.IncludeSystemEvents, record.IncludeAttachmentMetadata = includeReplies != 0, includeSystemEvents != 0, includeAttachmentMetadata != 0
 	record.AllowAttachmentPreview, record.LongTermSummaryEnabled = allowAttachmentPreview != 0, summaryEnabled != 0
 	record.WelcomeMessage, record.Description, record.AvatarURL = cloneString(welcome), cloneString(description), cloneString(avatar)
+	if len(rawAccessPolicy) > 0 {
+		policy, policyErr := botpolicy.Parse(rawAccessPolicy)
+		if policyErr != nil || policy == nil {
+			if policyErr == nil {
+				policyErr = errors.New("empty access policy")
+			}
+			return nil, internalError("decode workspace agent bot access policy", policyErr)
+		}
+		record.AccessPolicy = policy
+	}
 	record.AllowedMemberIDs, err = listVisibilityMembers(ctx, queryer, spaceID, botID)
 	if err != nil {
 		return nil, err
@@ -830,6 +844,19 @@ func (t *pgTx) UpdateSettings(ctx context.Context, spaceID, botID, visibilityPol
 	}
 	settings.BotID, settings.SpaceID, settings.VisibilityPolicy, settings.UpdatedAt = botID, spaceID, visibilityPolicy, at
 	return t.insertSettings(ctx, settings)
+}
+
+func (t *pgTx) UpdateAccessPolicy(ctx context.Context, spaceID, botID string, policy *botpolicy.Policy, at time.Time) error {
+	var raw any
+	if policy != nil {
+		encoded, err := json.Marshal(policy)
+		if err != nil {
+			return err
+		}
+		raw = encoded
+	}
+	_, err := t.tx.Exec(ctx, `UPDATE workspace_agent_bot_settings SET access_policy = $1, updated_at = $2 WHERE bot_id = $3 AND space_id = $4`, raw, at.UTC(), botID, spaceID)
+	return err
 }
 
 func (t *pgTx) ReplaceVisibilityMembers(ctx context.Context, spaceID, botID string, userIDs []string, at time.Time) error {

@@ -1,4 +1,5 @@
 import path from "node:path";
+import crypto from "node:crypto";
 import { decodeArtifactBase64 } from "./base64.js";
 import { AGENT_DIRECT_FILE_MAX_BYTES, normalizeFileBytes, readBoundedFile } from "./file-input.js";
 import {
@@ -30,10 +31,11 @@ import {
 } from "./daemon.js";
 
 import { readAgentTaskSummary } from "./task-runtime.js";
+import { AGENT_MESSAGE_CONTENT_SCHEMA } from "./message-content.js";
+import { DUALLANE_TASK_TOOLS, createTaskToolServer, buildAgentInteractiveCard, safeAgentOperationReference } from "./task-tools.js";
 
 const SUPPORTED_PROTOCOL_VERSIONS = new Set(["2025-06-18", "2025-03-26", "2024-11-05"]);
 const DEFAULT_MCP_PROTOCOL_VERSION = "2024-11-05";
-const ALLOWED_CARD_ACTIONS = new Set(["confirm", "cancel", "submit", "refresh"]);
 
 export const DUALLANE_MCP_TOOLS = [
   {
@@ -125,6 +127,7 @@ export const DUALLANE_MCP_TOOLS = [
     inputSchema: {
       type: "object",
       properties: {
+        taskId: { type: "string" },
         conversationId: { type: "string", description: "Target DualLane conversation ID (conv_...)." },
         limit: { type: "integer", minimum: 1, maximum: 200, description: "Max messages to fetch (default: 30)." },
         profile: { type: "string", description: "Local credential profile name (default: 'default')." },
@@ -140,10 +143,12 @@ export const DUALLANE_MCP_TOOLS = [
       properties: {
         conversationId: { type: "string", description: "Target DualLane conversation ID (conv_...)." },
         text: { type: "string", description: "Message text (supports Markdown)." },
+        content: AGENT_MESSAGE_CONTENT_SCHEMA,
+        taskId: { type: "string", description: "Server task ID; required for task-authorized conversations." },
         replyToMessageId: { type: "string", description: "Optional message ID (msg_...) to reply to." },
         profile: { type: "string", description: "Local credential profile name (default: 'default')." },
       },
-      required: ["conversationId", "text"],
+      required: ["conversationId"],
     },
   },
   {
@@ -153,11 +158,14 @@ export const DUALLANE_MCP_TOOLS = [
     inputSchema: {
       type: "object",
       properties: {
+        taskId: { type: "string" },
         messageId: { type: "string", description: "Message ID (msg_...) previously returned by duallane_send_message." },
         plainText: { type: "string", description: "Updated message text." },
+        content: AGENT_MESSAGE_CONTENT_SCHEMA,
+        expectedVersion: { type: "string", minLength: 64, maxLength: 64, description: "Current message.version for a task edit. A conflict is never refreshed automatically." },
         profile: { type: "string", description: "Local credential profile name (default: 'default')." },
       },
-      required: ["messageId", "plainText"],
+      required: ["messageId"],
     },
   },
   {
@@ -167,6 +175,7 @@ export const DUALLANE_MCP_TOOLS = [
     inputSchema: {
       type: "object",
       properties: {
+        taskId: { type: "string", description: "Server task ID for task-authorized destinations; local file paths are operator-only." },
         conversationId: { type: "string", description: "Target DualLane conversation ID (conv_...)." },
         filePath: { type: "string", description: "Local path to the file to upload (provide filePath, contentText, or contentBase64)." },
         contentText: { type: "string", description: "Inline UTF-8 file text when generating text/markdown/csv/svg/code without writing to disk." },
@@ -187,6 +196,7 @@ export const DUALLANE_MCP_TOOLS = [
     inputSchema: {
       type: "object",
       properties: {
+        taskId: { type: "string" },
         conversationId: { type: "string", description: "Target DualLane conversation ID (conv_...)." },
         title: { type: "string", description: "Card header title." },
         markdown: { type: "string", description: "Main Markdown body of the card." },
@@ -262,6 +272,7 @@ export const DUALLANE_MCP_TOOLS = [
     inputSchema: {
       type: "object",
       properties: {
+        taskId: { type: "string" },
         conversationId: { type: "string", description: "Target DualLane conversation ID (conv_...)." },
         state: {
           type: "string",
@@ -314,6 +325,14 @@ export const DUALLANE_MCP_TOOLS = [
       },
     },
   },
+  { name: "duallane_begin_task", description: "Operator: establish a server-authorized task for an exact delivered event. Never use a chat-supplied actor identity.",
+    inputSchema: { type: "object", properties: { eventId: { type: "string" }, profile: { type: "string" } }, required: ["eventId"] } },
+  { name: "duallane_cancel_task", description: "Operator: cancel further work in a server task chain. This does not withdraw published messages.",
+    inputSchema: { type: "object", properties: { taskId: { type: "string" }, profile: { type: "string" } }, required: ["taskId"] } },
+  ...DUALLANE_TASK_TOOLS.filter((tool) => !["duallane_send_message", "duallane_edit_message", "duallane_send_card"].includes(tool.name)).map((tool) => ({ ...tool,
+    description: `${tool.description} Operator entry requires an existing taskId; group adapters use mcp --task.`,
+    inputSchema: { ...tool.inputSchema, properties: { ...tool.inputSchema.properties, taskId: { type: "string" }, profile: { type: "string" } },
+      required: [...tool.inputSchema.required, ...(tool.name === "duallane_capabilities" ? [] : ["taskId"])] } })),
 ];
 
 export function createDualLaneMcpServer(options = {}) {
@@ -343,6 +362,20 @@ export function createDualLaneMcpServer(options = {}) {
 
   async function callTool(name, args = {}) {
     const profileName = normalizeProfileName(args.profile || defaultProfile);
+
+    if (name === "duallane_begin_task") return makeClient(profileName).client.createTask({ eventId: args.eventId });
+    if (name === "duallane_cancel_task") return makeClient(profileName).client.cancelAgentTask(args.taskId);
+    if (DUALLANE_TASK_TOOLS.some((tool) => tool.name === name) && !["duallane_send_message", "duallane_edit_message", "duallane_send_card"].includes(name)) {
+      const { client } = makeClient(profileName);
+      if (name === "duallane_capabilities" && !args.taskId) return client.getCapabilities();
+      if (typeof args.taskId !== "string" || !args.taskId) throw new DualLaneAgentError("task.context_required", "An existing server task is required");
+      const record = await client.getTask(args.taskId);
+      const scoped = client.forTask(record.task);
+      const input = { ...args }; delete input.taskId; delete input.profile;
+      const operationId = "operator-" + crypto.createHash("sha256").update(JSON.stringify([name, input])).digest("hex");
+      try { return await createTaskToolServer(scoped).callTool(name, input, operationId); }
+      finally { scoped.close(); }
+    }
 
     switch (name) {
       case "duallane_setup_start": {
@@ -528,21 +561,29 @@ export function createDualLaneMcpServer(options = {}) {
       case "duallane_get_context": {
         const { client } = makeClient(profileName);
         const limit = args.limit === undefined ? 30 : Number(args.limit);
-        return await client.getContext(args.conversationId, { limit });
+        const scoped = args.taskId ? client.forTask((await client.getTask(args.taskId)).task) : client;
+        try { return await scoped.getContext(args.conversationId, { limit }); }
+        finally { if (scoped !== client) scoped.close(); }
       }
 
       case "duallane_send_message": {
         const { client } = makeClient(profileName);
-        return await client.sendMessage({
+        const scoped = args.taskId ? client.forTask((await client.getTask(args.taskId)).task) : client;
+        try { return await scoped.sendMessage({
           conversationId: args.conversationId,
           text: args.text,
+          content: args.content,
           replyToMessageId: args.replyToMessageId,
-        });
+        }); } finally { if (scoped !== client) scoped.close(); }
       }
 
       case "duallane_edit_message": {
         const { client } = makeClient(profileName);
-        return await client.editMessage(args.messageId, args.plainText);
+        const scoped = args.taskId ? client.forTask((await client.getTask(args.taskId)).task) : client;
+        const input = args.taskId || args.content !== undefined || args.expectedVersion !== undefined
+          ? { plainText: args.plainText, content: args.content, expectedVersion: args.expectedVersion } : args.plainText;
+        try { return await scoped.editMessage(args.messageId, input); }
+        finally { if (scoped !== client) scoped.close(); }
       }
 
       case "duallane_send_file": {
@@ -570,60 +611,26 @@ export function createDualLaneMcpServer(options = {}) {
           typeof args.mimeType === "string" && args.mimeType.trim()
             ? args.mimeType.trim()
             : inferMimeTypeFromFileName(resolvedName);
-        return await client.sendFile({
+        const scoped = args.taskId ? client.forTask((await client.getTask(args.taskId)).task) : client;
+        try { return await scoped.sendFile({
           conversationId: args.conversationId,
           bytes: rawBytes,
           fileName: resolvedName,
           mimeType,
           text: args.text,
           replyToMessageId: args.replyToMessageId,
-        });
+        }); } finally { if (scoped !== client) scoped.close(); }
       }
 
       case "duallane_send_card": {
         const { client } = makeClient(profileName);
-        const elements = [
-          {
-            tag: "markdown",
-            content: String(args.markdown || ""),
-          },
-        ];
-        if (Array.isArray(args.buttons) && args.buttons.length > 0) {
-          const seen = new Set();
-          const actions = [];
-          for (const btn of args.buttons.slice(0, 4)) {
-            const actionId = String(btn?.actionId || "").trim();
-            if (!ALLOWED_CARD_ACTIONS.has(actionId) || seen.has(actionId)) {
-              throw new TypeError(`Card button actionId must be unique and one of: confirm, cancel, submit, refresh (got "${actionId}")`);
-            }
-            seen.add(actionId);
-            actions.push({
-              tag: "button",
-              text: { tag: "plain_text", content: String(btn.label || actionId) },
-              type: btn.style === "primary" || btn.style === "danger" ? btn.style : "default",
-              value: {
-                action: actionId,
-                ...(btn.value && typeof btn.value === "object" && !Array.isArray(btn.value) ? btn.value : {}),
-              },
-            });
-          }
-          if (actions.length > 0) {
-            elements.push({ tag: "hr" });
-            elements.push({ tag: "action", actions });
-          }
-        }
-        const card = {
-          header: {
-            title: { tag: "plain_text", content: String(args.title || "通知卡片") },
-            template: args.tone || "blue",
-          },
-          elements,
-        };
-        return await client.sendFeishuCard({
+        const card = buildAgentInteractiveCard(args);
+        const scoped = args.taskId ? client.forTask((await client.getTask(args.taskId)).task) : client;
+        try { return await scoped.sendFeishuCard({
           conversationId: args.conversationId,
           fallbackText: String(args.fallbackText || args.title || "交互卡片"),
           card,
-        });
+        }); } finally { if (scoped !== client) scoped.close(); }
       }
 
       case "duallane_wait_for_event": {
@@ -727,7 +734,9 @@ export function createDualLaneMcpServer(options = {}) {
 
       case "duallane_set_typing": {
         const { client } = makeClient(args.profile);
-        return await client.setTyping(args.conversationId, { state: args.state || "thinking" });
+        const scoped = args.taskId ? client.forTask((await client.getTask(args.taskId)).task) : client;
+        try { return await scoped.setTyping(args.conversationId, { state: args.state || "thinking" }); }
+        finally { if (scoped !== client) scoped.close(); }
       }
 
       case "duallane_doctor": {
@@ -870,6 +879,7 @@ export function createDualLaneMcpServer(options = {}) {
               code: toolErr?.code || "tool.execution_failed",
               message: redactSecrets(toolErr?.message || String(toolErr)),
               statusCode: toolErr?.statusCode || null,
+              ...(safeAgentOperationReference(toolErr?.operation) ? { operation: safeAgentOperationReference(toolErr.operation) } : {}),
             };
             return {
               jsonrpc: "2.0",
@@ -910,12 +920,13 @@ export function createDualLaneMcpServer(options = {}) {
 }
 
 export function startDualLaneMcpStdioServer(options = {}) {
-  const server = createDualLaneMcpServer(options);
+  const server = options.server ?? createDualLaneMcpServer(options);
   const input = options.stdin || process.stdin;
   const output = options.stdout || process.stdout;
 
   let buffer = Buffer.alloc(0);
   let framingMode = null; // "newline" | "content-length"
+  const maxInputBytes = options.maxInputBytes ?? 80 * 1024 * 1024;
 
   function sendResponse(payload) {
     if (!payload) return;
@@ -953,6 +964,11 @@ export function startDualLaneMcpStdioServer(options = {}) {
 
   input.on("data", (chunk) => {
     const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, "utf8");
+    if (buffer.length + buf.length > maxInputBytes) {
+      buffer = Buffer.alloc(0);
+      sendResponse({ jsonrpc: "2.0", id: null, error: { code: -32600, message: "MCP request exceeds the input limit" } });
+      input.pause(); input.destroy?.(); return;
+    }
     buffer = buffer.length === 0 ? buf : Buffer.concat([buffer, buf]);
 
     while (buffer.length > 0) {
@@ -972,6 +988,11 @@ export function startDualLaneMcpStdioServer(options = {}) {
           continue;
         }
         const length = Number(match[1]);
+        if (!Number.isSafeInteger(length) || length > maxInputBytes) {
+          buffer = Buffer.alloc(0);
+          sendResponse({ jsonrpc: "2.0", id: null, error: { code: -32600, message: "MCP request exceeds the input limit" } });
+          input.pause(); input.destroy?.(); return;
+        }
         const bodyStart = headerEnd + 4;
         if (buffer.length < bodyStart + length) return;
         const bodyText = buffer.subarray(bodyStart, bodyStart + length).toString("utf8");

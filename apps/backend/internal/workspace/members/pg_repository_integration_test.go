@@ -114,6 +114,53 @@ func TestPGMemberLifecycleAndVisibility(t *testing.T) {
 	if len(list) != len(users) {
 		t.Fatalf("owner member list length = %d, want %d", len(list), len(users))
 	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO users (id, github_login, display_name, kind, created_at, last_login_at)
+		VALUES ('bot_v2_member_projection', '__duallane_v2_member__', 'Private Bot', 'bot', $1, $1)
+	`, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO space_members (space_id, user_id, role, joined_at, removed_at)
+		VALUES ($1, 'bot_v2_member_projection', 'member', $2, NULL)
+	`, DefaultSpaceID, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO workspace_agent_bots (id, space_id, owner_user_id, bot_user_id, mode, name, name_normalized, visibility_policy, conversation_policy, trigger_policy, status, created_at, updated_at)
+		VALUES ('agent_record_member_projection', $1, 'usr_owner', 'bot_v2_member_projection', 'external_agent', 'Private Bot', 'private bot', 'space_members', 'direct-only', 'mention-or-command', 'active', $2, $2)
+	`, DefaultSpaceID, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO workspace_agent_bot_settings (bot_id, space_id, visibility_policy, allow_direct, allow_group, access_policy, created_at, updated_at)
+		VALUES ('agent_record_member_projection', $1, 'private', 1, 0, $2::jsonb, $3, $3)
+	`, DefaultSpaceID, `{"version":2,"discovery":{"audience":"owner_only"},"direct":{"audience":"owner_only"},"groups":{"audience":"owner_only","allowBotTriggers":false}}`, now); err != nil {
+		t.Fatal(err)
+	}
+	ownerList, err := service.List(ctx, ListInput{ActorID: "usr_owner", Options: ListOptions{Limit: 500}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ownerBot *Member
+	for i := range ownerList {
+		if ownerList[i].ID == "bot_v2_member_projection" {
+			ownerBot = &ownerList[i]
+			break
+		}
+	}
+	if ownerBot == nil || ownerBot.BotID != "agent_record_member_projection" {
+		t.Fatalf("owner custom bot projection = %#v, want botId agent_record_member_projection", ownerBot)
+	}
+	viewerList, err := service.List(ctx, ListInput{ActorID: "usr_viewer", Options: ListOptions{Limit: 500}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range viewerList {
+		if item.ID == "bot_v2_member_projection" {
+			t.Fatal("V2 owner-only bot leaked to non-owner member directory")
+		}
+	}
 	profileNickname := "Owner Alias"
 	profileDiscoverable := true
 	profileRecallReason := "内容有误"

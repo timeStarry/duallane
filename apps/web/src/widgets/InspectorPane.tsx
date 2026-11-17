@@ -43,6 +43,7 @@ import {
   Switch,
 } from "@/shared/ui";
 import { MessageRichContent } from "@/widgets/EmoteSystem";
+import { GroupBotRequests } from "@/widgets/GroupBotRequests";
 
 const GROUP_EMOJI_PRESETS = ["🚀", "💡", "🎨", "🛠️", "📌", "⚡", "🌿", "🎯"];
 
@@ -1154,6 +1155,14 @@ export function InspectorPane() {
                         })}
                       </div>
                     </div>
+
+                    {activeConv.kind === "group" && (
+                      <GroupBotRequests
+                        key={activeConv.id}
+                        conversationId={activeConv.id}
+                        previewMode={isPreviewMode}
+                      />
+                    )}
 
                     {activeConv.kind === "group" && (
                       <div className="border-t border-dl-border-hairline pt-3">

@@ -13,8 +13,8 @@
 
 本文是需求和架构契约，不是某个 Agent 框架的插件实现说明。Workspace 负责安全的消息渠道和授权边界；Hermes、OpenClaw 或其他 Agent Runtime 负责模型、记忆、工具和 Agent 循环。
 
-权限拆分、业务操作覆盖与接入演进的待评审方案见
-[Agent 协作平台升级方案](WORKSPACE_AGENT_PLATFORM_EVOLUTION_PLAN.md)。该提案不代表现有能力已升级，
+权限拆分、业务操作覆盖与接入演进方案见
+[Agent 协作平台升级方案](WORKSPACE_AGENT_PLATFORM_EVOLUTION_PLAN.md)。首版正在实施并验收，尚未代表线上实例已升级；
 采纳后的契约变更须随各阶段实施同步回本需求文档和所属领域规范。
 
 当前通用命令桥接、任务接收与完成、产物、入站附件、受控媒体获取和更新边界见
@@ -674,3 +674,16 @@ Bot 不得读取未加入的会话；Bot 所有者也不能因为拥有 Bot 获�
 6. **Frontend**：Bot 管理、Token 轮换、连接状态、卡片渲染和安全提示。
 
 任何一层都不得绕过现有会话成员校验、RBAC、配额、审计、日志脱敏或 `WORKSPACE_ENABLED` 开关。
+
+## 1.2 首版权限与任务契约
+
+V2 `accessPolicy` 独立控制 discovery、direct 和 groups。默认 owner-only 发现和私聊；
+群可选 current_members，只有已获准加入的群当前成员可使用，不派生私聊、目录或邀请权限。
+来源 Bot 触发默认关闭，显式白名单使用 Bot 配置 ID；结构化提及使用 Bot 用户 ID。
+创建者与群管理员分别批准入群；同一人兼任时仍校验两种资格。旧策略保持 NULL，
+不在读取或启动时推导新权限。保存 V2 时旧策略镜像收敛为 private，回退不恢复历史公开范围。
+
+触发后的读取、搜索、附件、发送和条件修改均绑定服务器任务与原始人类请求者，
+不继承创建者的会话／文件权限。详细约束见
+[任务契约](WORKSPACE_AGENT_RUNTIME_CONTRACT.md#task-authorization-and-on-demand-context-12)和
+[首版工作记录](backend/work-items/2026-11-17-agent-platform-v1.md)。

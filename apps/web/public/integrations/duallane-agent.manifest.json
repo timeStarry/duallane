@@ -1,17 +1,21 @@
 {
   "name": "@duallane/agent-sdk",
-  "version": "1.1.2",
-  "sha256": "1ee596806486ebdf45ed94c82225d80375bdfaf1e2b9718afb4fcf5b5b75ef5b",
-  "byteSize": 246158,
+  "version": "1.2.0",
+  "sha256": "367f444a88765c103c87d545612a9e5ca2556b4d8276f8fa385447ff680a0afe",
+  "byteSize": 301721,
   "downloadPath": "/integrations/duallane-agent.mjs",
   "documentationPath": "/integrations/v2/duallane-channel.md",
+  "skillPath": "/integrations/duallane-agent/SKILL.md",
   "minNodeVersion": "20.0.0",
-  "buildId": "008a3441e3c4ff3a6f24681ca7873f8e4a7cff402c3c7d87de1cfb23c190eee0",
+  "buildId": "7f28cf28b9042fe1b21343ee35d4594ef0118d2f24f4ac9e1e472cee53cc6211",
   "compatibility": {
     "gatewayVersion": 1,
     "bridgeProtocolVersion": 1
   },
   "highlights": [
+    "任务限定的历史、消息、成员与附件工具，受控提及和机器人协作",
+    "按需上下文与查询覆盖说明；条件修改和未知操作结果协调",
+    "接入 Skill 明确聊天能力、外部 Agent 工具与授权边界",
     "修复较大图片内联编码触发解析失败，严格校验编码和文件大小边界",
     "恢复机器人执行期间的思考状态，任务结束、失败或取消后停止续租",
     "通用命令桥接采用版本化任务与产物协议，支持受控媒体获取和授权入站附件",

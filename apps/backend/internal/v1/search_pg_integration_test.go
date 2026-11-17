@@ -166,4 +166,155 @@ func TestPGSearchResolvesAttachmentSourceMessageFromJoinTable(t *testing.T) {
 	if unlinked.SourceMessageID != "" {
 		t.Fatalf("unlinked attachment sourceMessageId = %q, want empty", unlinked.SourceMessageID)
 	}
+
+	if _, err := conn.Exec(ctx, `
+		INSERT INTO users (id, github_login, display_name, kind, created_at)
+		VALUES ('bot_search_private', '__duallane_search_private__', 'Private Search Bot', 'bot', $1)
+	`, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(ctx, `
+		INSERT INTO space_members (space_id, user_id, role, joined_at)
+		VALUES ('default', 'bot_search_private', 'member', $1)
+	`, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(ctx, `
+		INSERT INTO workspace_agent_bots (id, space_id, owner_user_id, bot_user_id, mode, name, name_normalized, visibility_policy, conversation_policy, trigger_policy, status, created_at, updated_at)
+		VALUES ('agent_record_search_private', 'default', 'usr_owner', 'bot_search_private', 'external_agent', 'Private Search Bot', 'private search bot', 'private', 'direct-only', 'mention-or-command', 'active', $1, $1)
+	`, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(ctx, `
+		INSERT INTO workspace_agent_bot_settings (bot_id, space_id, visibility_policy, allow_direct, allow_group, access_policy, created_at, updated_at)
+		VALUES ('agent_record_search_private', 'default', 'private', 1, 0, $1::jsonb, $2, $2)
+	`, `{"version":2,"discovery":{"audience":"owner_only"},"direct":{"audience":"owner_only"},"groups":{"audience":"owner_only","allowBotTriggers":false}}`, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(ctx, `
+		INSERT INTO conversations (id, space_id, type, title, direct_key, created_by, created_at)
+		VALUES ('conv_search_private', 'default', 'direct', 'Private Search Bot', 'search-private-direct', 'usr_owner', $1)
+	`, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(ctx, `
+		INSERT INTO conversation_members (conversation_id, user_id, joined_at)
+		VALUES ('conv_search_private', 'usr_owner', $1), ('conv_search_private', 'usr_member', $1), ('conv_search_private', 'bot_search_private', $1)
+	`, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(ctx, `
+		INSERT INTO messages (id, space_id, conversation_id, author_id, author_kind, kind, content_format, content_json, plain_text, created_at)
+		VALUES ('msg_search_private', 'default', 'conv_search_private', 'usr_owner', 'human', 'user', 'duallane.message+json;v=1', '{}', 'private architecture secret', $1)
+	`, now); err != nil {
+		t.Fatal(err)
+	}
+	privateSearch, err := repo.Search(ctx, "usr_member", "private architecture", "messages", 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, hit := range privateSearch.Messages {
+		if hit.ConversationID == "conv_search_private" {
+			t.Fatal("V2 owner-only DM leaked into v1 message search")
+		}
+	}
+
+	bootstrap, err := repo.GetBootstrap(ctx, "usr_owner", now)
+	if err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+	var projectedBot *V1BootstrapMember
+	for i := range bootstrap.Members {
+		member := &bootstrap.Members[i]
+		if member.ID == "bot_search_private" {
+			projectedBot = member
+			break
+		}
+	}
+	if projectedBot == nil || projectedBot.BotID != "agent_record_search_private" {
+		t.Fatalf("bootstrap custom bot projection = %#v, want botId agent_record_search_private", projectedBot)
+	}
+	for _, member := range bootstrap.Members {
+		if member.ID == "usr_owner" || member.ID == "usr_member" {
+			if member.BotID != "" {
+				t.Fatalf("bootstrap human projection leaked botId: %#v", member)
+			}
+		}
+	}
+	viewerBootstrap, err := repo.GetBootstrap(ctx, "usr_member", now)
+	if err != nil {
+		t.Fatalf("member bootstrap: %v", err)
+	}
+	for _, member := range viewerBootstrap.Members {
+		if member.ID == "bot_search_private" {
+			t.Fatalf("private custom bot leaked to non-owner bootstrap: %#v", member)
+		}
+	}
+	// Bootstrap is an identity pool for rendered conversations, not a directory
+	// grant. Approved group friends must resolve the private Bot's real mention ID.
+	for _, statement := range []string{
+		`UPDATE workspace_agent_bot_settings SET allow_group=1,access_policy=jsonb_set(access_policy,'{groups,audience}','"current_members"'::jsonb) WHERE bot_id='agent_record_search_private'`,
+		`UPDATE workspace_agent_bots SET conversation_policy='group-capable' WHERE id='agent_record_search_private'`,
+		`INSERT INTO conversation_members(conversation_id,user_id,joined_at) VALUES('conv_grp_1','bot_search_private',NOW())`,
+		`INSERT INTO workspace_agent_bot_group_policies(bot_id,space_id,conversation_id,status,invited_by,approved_by,created_at,updated_at) VALUES('agent_record_search_private','default','conv_grp_1','active','usr_owner','usr_owner',NOW(),NOW())`,
+	} {
+		if _, err := conn.Exec(ctx, statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	groupBootstrap, err := repo.GetBootstrap(ctx, "usr_member", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundGroupBot := false
+	for _, member := range groupBootstrap.Members {
+		if member.ID == "bot_search_private" {
+			foundGroupBot = member.BotID == "agent_record_search_private"
+		}
+	}
+	if !foundGroupBot {
+		t.Fatal("approved group Bot missing from mention identity pool")
+	}
+	for _, conv := range groupBootstrap.Conversations {
+		if conv.ID == "conv_search_private" {
+			t.Fatal("group identity incorrectly granted private DM visibility")
+		}
+	}
+	if _, err := conn.Exec(ctx, `UPDATE workspace_agent_bot_group_policies SET status='removed' WHERE bot_id='agent_record_search_private'`); err != nil {
+		t.Fatal(err)
+	}
+	removedBootstrap, err := repo.GetBootstrap(ctx, "usr_member", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, member := range removedBootstrap.Members {
+		if member.ID == "bot_search_private" {
+			t.Fatal("removed group authorization retained private Bot identity")
+		}
+	}
+
+	if _, err := conn.Exec(ctx, `UPDATE workspace_agent_bot_group_policies SET status='pending' WHERE bot_id='agent_record_search_private'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(ctx, `UPDATE conversation_members SET role='owner' WHERE conversation_id='conv_grp_1' AND user_id='usr_owner'`); err != nil {
+		t.Fatal(err)
+	}
+	pending, err := repo.ListGroupBotRequests(ctx, "usr_owner", "conv_grp_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !pending.CanManage || len(pending.Requests) != 1 || pending.Requests[0].BotID != "agent_record_search_private" {
+		t.Fatalf("manager pending projection: %#v", pending)
+	}
+	ordinary, err := repo.ListGroupBotRequests(ctx, "usr_member", "conv_grp_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ordinary.CanManage || len(ordinary.Requests) != 0 {
+		t.Fatalf("ordinary member received approval requests: %#v", ordinary)
+	}
+	if _, err := repo.ListGroupBotRequests(ctx, "not-a-group-member", "conv_grp_1"); err != ErrNotFound {
+		t.Fatalf("outsider approval list: %v", err)
+	}
+
 }

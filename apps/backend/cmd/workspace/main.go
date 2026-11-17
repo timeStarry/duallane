@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	v1 "github.com/timestarry/duallane/apps/backend/internal/v1"
 	"github.com/timestarry/duallane/apps/backend/internal/platform/config"
 	"github.com/timestarry/duallane/apps/backend/internal/platform/httpserver"
 	"github.com/timestarry/duallane/apps/backend/internal/platform/logging"
@@ -21,6 +20,7 @@ import (
 	"github.com/timestarry/duallane/apps/backend/internal/platform/migrations"
 	"github.com/timestarry/duallane/apps/backend/internal/platform/postgres"
 	platformstorage "github.com/timestarry/duallane/apps/backend/internal/platform/storage"
+	v1 "github.com/timestarry/duallane/apps/backend/internal/v1"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/auth"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/avatars"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/bootstrap"
@@ -286,7 +286,8 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 		}
 		objectStoreReady = true
 		legacyFileReader, _ := blobStore.(files.LegacyObjectReader)
-		fileService = files.NewService(files.ServiceOptions{Repository: files.NewPGRepository(pool), BlobStore: blobStore, LegacyReader: legacyFileReader})
+		fileRepository := files.NewPGRepository(pool)
+		fileService = files.NewService(files.ServiceOptions{Repository: fileRepository, BlobStore: blobStore, LegacyReader: legacyFileReader})
 		legacyAvatarReader, _ := blobStore.(avatars.LegacyObjectReader)
 		avatarService = avatars.NewService(avatars.ServiceOptions{
 			Repository: avatars.NewPGRepository(pool), BlobStore: blobStore,
@@ -363,7 +364,7 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 			Bots: botService, Messages: botMessageService, Cards: cardService, Files: fileService,
 		})
 		botGatewayRepository := botgateway.NewPGRepositoryWithDomainTransactions(pool, botgateway.DomainTransactionOptions{
-			Messages: messageRepository, Cards: cardRepository,
+			Messages: messageRepository, Cards: cardRepository, Files: fileRepository,
 		})
 		botGatewayService = botgateway.NewService(botgateway.ServiceOptions{
 			Repository:       botGatewayRepository,

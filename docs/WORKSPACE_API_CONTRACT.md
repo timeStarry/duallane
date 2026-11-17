@@ -973,3 +973,35 @@ bootstrap.policy.memberVisibilityBasis is direct_contacts, and
 bootstrap.permissions.canManageMemberVisibility identifies the owner management
 surface. Conversation and group-member mutations enforce the same visibility
 scope server-side.
+
+## 16. Agent task API (1.2 foundation)
+
+All endpoints below use Bot authentication. A human Session cannot substitute for
+it. `X-DualLane-Task` is a server-issued reference bound to the same Bot/token,
+conversation and requester; V2 policy makes it mandatory for business calls.
+
+| Endpoint | Contract |
+| --- | --- |
+| `GET /api/bot/v2/capabilities?conversationId=...` | Implemented features, current scopes/grants and bounded limits; discovery is not a content grant |
+| `POST /api/bot/v2/tasks` `{eventId}` | Only an authorized delivered `message.created`; duplicate Bot/event returns the same task/root budget |
+| `GET /api/bot/v2/tasks/{taskId}` | Current validity for bounded SDK polling |
+| `DELETE /api/bot/v2/tasks/{taskId}` | Cancel further root work, preserve committed output |
+| `GET /api/bot/v2/messages/{messageId}` | Exact authorized ordinary message plus opaque version and coverage |
+| `GET /api/bot/v2/conversations/{id}/messages` | `limit`, `before`, `query`, `authorId`, `startTime`, `endTime`; keyset cursor bound to task/query/time scope, explicit coverage/hasMore/truncated |
+| `GET /api/bot/v2/conversations/{id}/members` | Minimal current identity pool; `id` is mention user ID, optional `botId` is custom Bot config ID |
+| `PATCH /api/bot/v2/messages/{id}` | Current-task own message only; expectedVersion required; full structured content for mixed messages |
+| `GET /api/bot/v2/tasks/{id}/operations/{operation}/{key}` | Same-task committed result or unknown/safeToRetry=false; no implicit replay |
+
+History excludes recalled, hidden, deleted, system and private-topic messages;
+current conversation/content grants and owner time/count limits remain in force.
+Uploads bind to the task at reservation, then recheck token, input and grants in
+the final transaction after bytes are staged. Card update provenance derives from
+the original task's trusted creation receipt, never from a copied card block.
+
+Human-authorized group managers can use
+`GET /api/v1/conversations/{id}/bot-requests` for pending owner-approved requests;
+ordinary members get no requests, outsiders get404. Approval uses the existing
+Bot group-policy endpoint with status only and cannot widen owner-requested
+context. Bootstrap `members` is a conversation identity pool, not a directory
+grant: an approved shared-group private Bot can be resolved for real mentions
+without becoming discoverable in the directory or eligible for direct chat.

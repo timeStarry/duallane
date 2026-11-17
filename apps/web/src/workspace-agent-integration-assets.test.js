@@ -77,5 +77,9 @@ describe("versioned Agent integration assets", () => {
       }
     }
     expect(route("/integrations/v1/duallane-channel.md")).toContain("expires 1y;");
+    for (const current of ["/integrations/v2/duallane-channel.md", "/integrations/duallane-agent/SKILL.md"]) {
+      expect(route(current)).toContain("expires -1;");
+      expect(route(current)).not.toMatch(/\badd_header\b/u);
+    }
   });
 });

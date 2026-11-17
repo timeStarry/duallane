@@ -16,10 +16,11 @@ func TestEmbeddedReleaseCompatibilityPolicyIsReviewedAndBounded(t *testing.T) {
 	if policy.Version != ReleaseCompatibilityPolicyVersion || policy.BaseMigration != ReleaseCompatibilityBaseMigration {
 		t.Fatalf("unexpected embedded policy: %#v", policy)
 	}
-	if len(policy.CompatibleMigrations) != 3 ||
+	if len(policy.CompatibleMigrations) != 4 ||
 		policy.CompatibleMigrations[0].Name != ReleaseCompatibilityMigrationName || policy.CompatibleMigrations[0].SHA256 != ReleaseCompatibilityMigrationSHA256 ||
 		policy.CompatibleMigrations[1].Name != ReleaseCompatibilityMobileMigrationName || policy.CompatibleMigrations[1].SHA256 != ReleaseCompatibilityMobileMigrationSHA256 ||
-		policy.CompatibleMigrations[2].Name != ReleaseCompatibilityV1MigrationName || policy.CompatibleMigrations[2].SHA256 != ReleaseCompatibilityV1MigrationSHA256 {
+		policy.CompatibleMigrations[2].Name != ReleaseCompatibilityV1MigrationName || policy.CompatibleMigrations[2].SHA256 != ReleaseCompatibilityV1MigrationSHA256 ||
+		policy.CompatibleMigrations[3].Name != ReleaseCompatibilityAgentMigrationName || policy.CompatibleMigrations[3].SHA256 != ReleaseCompatibilityAgentMigrationSHA256 {
 		t.Fatalf("unexpected compatible migration policy: %#v", policy.CompatibleMigrations)
 	}
 }
@@ -139,5 +140,29 @@ func TestCanonicalReleaseCompatibilityBaselineIsExact(t *testing.T) {
 	required[len(required)-1] = ReleaseCompatibilityMigrationName
 	if isCanonicalReleaseCompatibilityBaseline(required) {
 		t.Fatal("034 must not be treated as the 033 compatibility baseline")
+	}
+}
+
+func TestAgentCompatibilityRequiresExactSchema36Bridge(t *testing.T) {
+	policy, err := EmbeddedReleaseCompatibilityPolicy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseline := append([]string(nil), canonicalReleaseCompatibilityBaseline[:]...)
+	baseline = append(baseline, ReleaseCompatibilityMigrationName, ReleaseCompatibilityMobileMigrationName, ReleaseCompatibilityV1MigrationName)
+	if !policy.allowsAfter(baseline, ReleaseCompatibilityAgentMigrationName) {
+		t.Fatal("reviewed schema36 bridge must allow037")
+	}
+	if policy.allowsAfter(baseline[:len(baseline)-1], ReleaseCompatibilityAgentMigrationName) {
+		t.Fatal("schema35 cannot claim037")
+	}
+	old := policy
+	old.CompatibleMigrations = append([]CompatibleMigration(nil), policy.CompatibleMigrations[:3]...)
+	if old.allowsAfter(baseline, ReleaseCompatibilityAgentMigrationName) {
+		t.Fatal("historical schema36 policy acquired037 authority")
+	}
+	baseline[0] = "001_renamed.sql"
+	if policy.allowsAfter(baseline, ReleaseCompatibilityAgentMigrationName) {
+		t.Fatal("renamed baseline acquired037 authority")
 	}
 }

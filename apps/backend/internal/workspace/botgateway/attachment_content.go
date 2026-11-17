@@ -65,6 +65,12 @@ func (s *Service) authorizeAttachmentRead(ctx context.Context, current *Auth, in
 	if err := RequireScope(current, scope); err != nil {
 		return Attachment{}, err
 	}
+	if err := RequireScope(current, ScopeMessagesReadContext); err != nil {
+		return Attachment{}, err
+	}
+	if _, err := s.RequireContextGrant(ctx, current, input.ConversationID); err != nil {
+		return Attachment{}, err
+	}
 	attachmentID, err := normalizeIdentifier(input.AttachmentID, CodeAttachmentInvalid)
 	if err != nil {
 		return Attachment{}, err
@@ -73,12 +79,25 @@ func (s *Service) authorizeAttachmentRead(ctx context.Context, current *Auth, in
 	if err != nil {
 		return Attachment{}, err
 	}
-	contextResult, err := s.GetContext(ctx, current, input.ConversationID, nil)
-	if err != nil {
-		return Attachment{}, err
+	var visible []ContextMessage
+	if AgentTaskID(ctx) != "" {
+		if err := s.AuthorizeAgentOperation(ctx, current, input.ConversationID); err != nil {
+			return Attachment{}, err
+		}
+		result, readErr := s.GetAgentMessage(ctx, current, messageID)
+		if readErr != nil {
+			return Attachment{}, readErr
+		}
+		visible = []ContextMessage{result["message"].(ContextMessage)}
+	} else {
+		contextResult, readErr := s.GetContext(ctx, current, input.ConversationID, nil)
+		if readErr != nil {
+			return Attachment{}, readErr
+		}
+		visible = contextResult["messages"].([]ContextMessage)
 	}
 	linked := false
-	for _, message := range contextResult["messages"].([]ContextMessage) {
+	for _, message := range visible {
 		if message.ID != messageID {
 			continue
 		}
@@ -108,7 +127,12 @@ func (s *Service) authorizeAttachmentRead(ctx context.Context, current *Auth, in
 	limit := MaxAgentAttachmentContentBytes
 	allowed := false
 	switch strings.ToLower(row.MIMEType) {
-	case "image/png", "image/jpeg", "image/gif", "image/webp", "text/plain", "application/pdf":
+	case "image/png", "image/jpeg", "image/gif", "image/webp", "text/plain", "application/pdf",
+		"text/markdown", "text/csv", "text/html", "text/css", "text/javascript", "application/javascript",
+		"text/xml", "application/xml", "application/json",
+		"application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+		"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+		"application/vnd.openxmlformats-officedocument.presentationml.presentation":
 		allowed = true
 	}
 	if mode == "preview" {
@@ -127,6 +151,9 @@ func (s *Service) authorizeAttachmentRead(ctx context.Context, current *Auth, in
 	}
 	if row.ByteSize < 0 || row.ByteSize > limit {
 		return Attachment{}, NewError("file.too_large", "文件超过机器人读取上限", 413)
+	}
+	if err := s.consumeAgentRead(ctx, current, input.ConversationID, row.ByteSize); err != nil {
+		return Attachment{}, err
 	}
 	return projectAttachment(*row), nil
 }

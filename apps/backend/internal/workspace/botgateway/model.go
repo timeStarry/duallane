@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/auth"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/botpolicy"
 )
 
 const (
@@ -84,6 +85,7 @@ type Auth struct {
 }
 
 type Settings struct {
+	AccessPolicy              *botpolicy.Policy
 	VisibilityPolicy          string
 	AllowDirect               bool
 	AllowGroup                bool
@@ -107,14 +109,15 @@ type Settings struct {
 }
 
 type SettingsProjection struct {
-	VisibilityPolicy     string        `json:"visibilityPolicy"`
-	AllowDirect          bool          `json:"allowDirect"`
-	AllowGroup           bool          `json:"allowGroup"`
-	GroupInviterPolicy   string        `json:"groupInviterPolicy"`
-	RequireOwnerApproval bool          `json:"requireOwnerApproval"`
-	ProactiveEnabled     bool          `json:"proactiveEnabled"`
-	TriggerPolicy        string        `json:"triggerPolicy"`
-	Context              ContextLimits `json:"context"`
+	AccessPolicy         *botpolicy.Policy `json:"accessPolicy,omitempty"`
+	VisibilityPolicy     string            `json:"visibilityPolicy"`
+	AllowDirect          bool              `json:"allowDirect"`
+	AllowGroup           bool              `json:"allowGroup"`
+	GroupInviterPolicy   string            `json:"groupInviterPolicy"`
+	RequireOwnerApproval bool              `json:"requireOwnerApproval"`
+	ProactiveEnabled     bool              `json:"proactiveEnabled"`
+	TriggerPolicy        string            `json:"triggerPolicy"`
+	Context              ContextLimits     `json:"context"`
 }
 
 type ContextLimits struct {
@@ -192,6 +195,8 @@ type ContextMessageRecord struct {
 }
 
 type ContextMessage struct {
+	Version          string         `json:"version,omitempty"`
+	Attachments      []Attachment   `json:"attachments,omitempty"`
 	ID               string         `json:"id"`
 	ConversationID   string         `json:"conversationId"`
 	AuthorID         *string        `json:"authorId"`
@@ -225,6 +230,7 @@ type MessageWriteRequest struct {
 }
 
 type GatewayMessage struct {
+	Version        string         `json:"version,omitempty"`
 	ID             string         `json:"id"`
 	ConversationID string         `json:"conversationId"`
 	PlainText      string         `json:"plainText"`
@@ -525,6 +531,7 @@ func projectSettings(settings *Settings) *SettingsProjection {
 		return nil
 	}
 	return &SettingsProjection{
+		AccessPolicy:         settings.AccessPolicy,
 		VisibilityPolicy:     settings.VisibilityPolicy,
 		AllowDirect:          settings.AllowDirect,
 		AllowGroup:           settings.AllowGroup,

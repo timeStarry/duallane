@@ -48,6 +48,8 @@ export interface V1User {
   avatarColor?: string;
   description?: string;
   botOnline?: boolean;
+  /** Configured Bot ID; omitted for humans, system Bots, and unauthorized viewers. */
+  botId?: string;
   searchDiscoverable?: boolean;
 }
 
@@ -710,6 +712,15 @@ function upsertRawMemberRecord(
       : prev?.description;
   const nextBotOnline =
     typeof m.botOnline === "boolean" ? m.botOnline : prev?.botOnline;
+  const hasExplicitBotId = Object.prototype.hasOwnProperty.call(m, "botId");
+  const nextBotId =
+    role === "bot"
+      ? hasExplicitBotId
+        ? typeof m.botId === "string" && m.botId.trim()
+          ? m.botId.trim()
+          : undefined
+        : prev?.botId
+      : undefined;
   const nextSearchDiscoverable =
     typeof m.searchDiscoverable === "boolean"
       ? m.searchDiscoverable
@@ -725,6 +736,7 @@ function upsertRawMemberRecord(
     avatarColor: nextAvatarColor,
     description: nextDescription,
     ...(typeof nextBotOnline === "boolean" ? { botOnline: nextBotOnline } : {}),
+    ...(nextBotId ? { botId: nextBotId } : {}),
     ...(typeof nextSearchDiscoverable === "boolean"
       ? { searchDiscoverable: nextSearchDiscoverable }
       : {}),

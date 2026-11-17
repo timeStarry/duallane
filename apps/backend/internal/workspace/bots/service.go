@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/auth"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/botpolicy"
 	"golang.org/x/text/unicode/norm"
 )
 
@@ -652,6 +653,14 @@ func (s *Service) UpdateSettings(ctx context.Context, input UpdateSettingsInput)
 			fallback := defaultSettings(bot.ID, spaceID, bot.UpdatedAt)
 			current = &fallback
 		}
+		// A V2 policy makes the policy object authoritative, but the remaining
+		// settings are still independently mutable.  The UI sends the current
+		// policy alongside a permission-adjacent legacy field (for example
+		// allowGroup or groupInviterPolicy), so only reject an old-client patch
+		// that attempts to change those fields without carrying accessPolicy.
+		if current.AccessPolicy != nil && legacyPermissionPatch(input) && !hasPatch(input, "accessPolicy") {
+			return mutationResult{}, rejected(validationError(CodeBotInvalidSettings, "V2 权限策略启用后请修改 accessPolicy，不能使用旧权限字段")), nil
+		}
 		updated, validationErr := applySettingsPatch(*current, input, now)
 		if validationErr != nil {
 			return mutationResult{}, rejected(validationErr), nil
@@ -663,7 +672,14 @@ func (s *Service) UpdateSettings(ctx context.Context, input UpdateSettingsInput)
 		if err := tx.UpdateSettings(ctx, spaceID, bot.ID, updated.VisibilityPolicy, conversationPolicy, updated, now); err != nil {
 			return mutationResult{}, nil, err
 		}
-		if hasPatch(input, "allowedMemberIds") {
+		if hasPatch(input, "accessPolicy") {
+			if policyTx, ok := tx.(AccessPolicyTransaction); ok {
+				if err := policyTx.UpdateAccessPolicy(ctx, spaceID, bot.ID, updated.AccessPolicy, now); err != nil {
+					return mutationResult{}, nil, err
+				}
+			}
+		}
+		if hasPatch(input, "allowedMemberIds") || hasPatch(input, "accessPolicy") {
 			if err := tx.ReplaceVisibilityMembers(ctx, spaceID, bot.ID, updated.AllowedMemberIDs, now); err != nil {
 				return mutationResult{}, nil, err
 			}
@@ -718,27 +734,29 @@ func (s *Service) UpdateGroupPolicy(ctx context.Context, input UpdateGroupPolicy
 		if err := tx.Lock(ctx, botLifecycleLockKey(spaceID, input.BotID)); err != nil {
 			return mutationResult{}, nil, err
 		}
-		bot, err := s.ownerBot(ctx, tx, actor, spaceID, input.BotID)
+		bot, err := tx.GetBot(ctx, spaceID, strings.TrimSpace(input.BotID))
 		if err != nil {
-			return mutationResult{}, rejectionFromError(err), nil
+			return mutationResult{}, nil, err
+		}
+		if bot == nil {
+			anyBot, lookupErr := tx.GetBotAnySpace(ctx, strings.TrimSpace(input.BotID))
+			if lookupErr != nil {
+				return mutationResult{}, nil, lookupErr
+			}
+			if anyBot != nil {
+				return mutationResult{}, rejected(permissionDeniedError()), nil
+			}
+			return mutationResult{}, rejected(notFoundError(CodeBotNotFound, MessageBotNotFound)), nil
 		}
 		if !identifierPattern.MatchString(conversationID) {
 			return mutationResult{}, rejected(NewError(CodeBotInvalidGroupPolicy, MessageBotInvalidGroupPolicy, 400)), nil
 		}
-		status := input.Status
+		status := strings.TrimSpace(input.Status)
 		if status == "" {
 			status = "active"
 		}
 		if status != "pending" && status != "active" && status != "rejected" && status != "removed" {
 			return mutationResult{}, rejected(NewError(CodeBotInvalidGroupPolicy, MessageBotInvalidGroupPolicy, 400)), nil
-		}
-		allowTrigger := status == "active"
-		if input.AllowTrigger != nil {
-			allowTrigger = *input.AllowTrigger
-		}
-		allowContext := false
-		if input.AllowContext != nil {
-			allowContext = *input.AllowContext
 		}
 		if input.MaxMessages != nil && (*input.MaxMessages < 1 || *input.MaxMessages > 200) {
 			return mutationResult{}, rejected(NewError(CodeBotInvalidGroupPolicy, MessageBotInvalidGroupPolicy, 400)), nil
@@ -750,8 +768,35 @@ func (s *Service) UpdateGroupPolicy(ctx context.Context, input UpdateGroupPolicy
 		if manager == nil || manager.Type != "group" {
 			return mutationResult{}, rejected(notFoundError(CodeBotInvalidGroupPolicy, "请选择群聊会话")), nil
 		}
-		if !manager.IsMember || (manager.Role != "owner" && manager.Role != "admin") {
-			return mutationResult{}, rejected(forbiddenError(CodeBotGroupPolicyForbidden, "只有当前群聊管理员可以管理 Bot")), nil
+		actorIsOwner := bot.OwnerUserID == actor.ID
+		actorIsManager := manager.IsMember && (manager.Role == "owner" || manager.Role == "admin")
+		if !actorIsOwner && !actorIsManager {
+			return mutationResult{}, rejected(forbiddenError(CodeBotGroupPolicyForbidden, "只有 Bot 所有者或当前群聊管理员可以管理 Bot")), nil
+		}
+		ownerMembership, err := tx.GetGroupManager(ctx, spaceID, conversationID, bot.OwnerUserID)
+		if err != nil {
+			return mutationResult{}, nil, err
+		}
+		ownerIsMember := ownerMembership != nil && ownerMembership.Type == "group" && ownerMembership.IsMember
+		ownerIsManager := ownerIsMember && (ownerMembership.Role == "owner" || ownerMembership.Role == "admin")
+		if actorIsOwner && status != "removed" && status != "rejected" && !ownerIsMember {
+			return mutationResult{}, rejected(forbiddenError(CodeBotGroupPolicyForbidden, "Bot 所有者必须是当前群聊成员")), nil
+		}
+		if !actorIsOwner && !actorIsManager {
+			return mutationResult{}, rejected(forbiddenError(CodeBotGroupPolicyForbidden, "只有当前群聊管理员可以处理授权请求")), nil
+		}
+
+		policies, err := tx.ListGroupPolicies(ctx, spaceID, bot.ID)
+		if err != nil {
+			return mutationResult{}, nil, err
+		}
+		var existingPolicy *GroupPolicyRecord
+		for index := range policies {
+			if policies[index].ConversationID == conversationID {
+				value := policies[index]
+				existingPolicy = &value
+				break
+			}
 		}
 		settings, err := tx.GetSettings(ctx, spaceID, bot.ID)
 		if err != nil {
@@ -761,16 +806,111 @@ func (s *Service) UpdateGroupPolicy(ctx context.Context, input UpdateGroupPolicy
 			fallback := defaultSettings(bot.ID, spaceID, bot.UpdatedAt)
 			settings = &fallback
 		}
-		if status == "active" && (!settings.AllowGroup || settings.VisibilityPolicy == VisibilityPrivate) {
-			return mutationResult{}, rejected(forbiddenError(CodeBotGroupPolicyForbidden, MessageBotGroupPolicyForbidden)), nil
-		}
 		existing, err := tx.GetContextGrant(ctx, spaceID, bot.ID, conversationID)
 		if err != nil {
 			return mutationResult{}, nil, err
 		}
+		if !actorIsOwner {
+			if existingPolicy == nil || valueOrEmpty(existingPolicy.InvitedBy) != bot.OwnerUserID {
+				return mutationResult{}, rejected(forbiddenError(CodeBotGroupPolicyForbidden, "必须先由 Bot 所有者发起授权请求")), nil
+			}
+			if status == "active" || status == "rejected" {
+				if existingPolicy.Status != "pending" {
+					return mutationResult{}, rejected(forbiddenError(CodeBotGroupPolicyForbidden, "只能处理 Bot 所有者的待处理授权请求")), nil
+				}
+				if !ownerIsMember {
+					return mutationResult{}, rejected(forbiddenError(CodeBotGroupPolicyForbidden, "Bot 所有者已不在当前群聊")), nil
+				}
+			} else if status == "removed" {
+				if existingPolicy.Status != "active" && existingPolicy.Status != "pending" {
+					return mutationResult{}, rejected(forbiddenError(CodeBotGroupPolicyForbidden, "只能撤销已有的 Bot 群聊授权")), nil
+				}
+			} else {
+				return mutationResult{}, rejected(forbiddenError(CodeBotGroupPolicyForbidden, "群管理员只能批准或拒绝 Bot 所有者的待处理请求")), nil
+			}
+		}
+
+		allowTrigger := status == "active"
+		if input.AllowTrigger != nil {
+			allowTrigger = *input.AllowTrigger
+		}
+		allowContext := false
+		if input.AllowContext != nil {
+			allowContext = *input.AllowContext
+		}
+		if actorIsOwner && existingPolicy != nil && existingPolicy.Status == "pending" {
+			if input.AllowTrigger == nil {
+				allowTrigger = existingPolicy.AllowTrigger
+			}
+			if input.AllowContext == nil {
+				allowContext = existingPolicy.AllowContext
+			}
+		}
+
+		// A non-owner administrator is only the second approver. It may narrow
+		// an owner's pending request, but it can never create or widen one.
+		if !actorIsOwner && existingPolicy != nil {
+			if input.AllowTrigger != nil && *input.AllowTrigger && !existingPolicy.AllowTrigger {
+				return mutationResult{}, rejected(forbiddenError(CodeBotGroupPolicyForbidden, "群管理员不能扩大 Bot 所有者的授权范围")), nil
+			}
+			if input.AllowContext != nil && *input.AllowContext && !existingPolicy.AllowContext {
+				return mutationResult{}, rejected(forbiddenError(CodeBotGroupPolicyForbidden, "群管理员不能扩大 Bot 所有者的上下文授权")), nil
+			}
+			ownerMaxMessages := existingPolicy.MaxContextMessages
+			if ownerMaxMessages == nil {
+				ownerMaxMessages = existingPolicy.ContextMaxMessages
+			}
+			if input.MaxMessages != nil && (ownerMaxMessages == nil || *input.MaxMessages > *ownerMaxMessages) {
+				return mutationResult{}, rejected(forbiddenError(CodeBotGroupPolicyForbidden, "群管理员不能扩大 Bot 所有者的历史范围")), nil
+			}
+			allowTrigger, allowContext = existingPolicy.AllowTrigger, existingPolicy.AllowContext
+			if input.AllowTrigger != nil && !*input.AllowTrigger {
+				allowTrigger = false
+			}
+			if input.AllowContext != nil && !*input.AllowContext {
+				allowContext = false
+			}
+		}
+
+		// Revocation is intentionally represented by a non-active policy and a
+		// disabled grant. This keeps a previous approval from surviving a later
+		// owner request and forces both sides to consent again.
+		if status == "removed" || status == "rejected" {
+			allowTrigger, allowContext = false, false
+		}
+
+		// An owner who is only a group member can create or renew the request,
+		// but cannot activate the Bot. If an already approved policy is left
+		// untouched, preserve it; changing its intent starts a fresh request.
+		if actorIsOwner && existingPolicy != nil && existingPolicy.Status == "active" && input.AllowTrigger == nil && input.AllowContext == nil {
+			allowTrigger, allowContext = existingPolicy.AllowTrigger, existingPolicy.AllowContext
+		}
+		if actorIsOwner && !ownerIsManager && status == "active" {
+			unchangedApproval := existingPolicy != nil && existingPolicy.Status == "active" && valueOrEmpty(existingPolicy.InvitedBy) == bot.OwnerUserID &&
+				input.AllowTrigger == nil && input.AllowContext == nil && input.MaxMessages == nil
+			if !unchangedApproval {
+				status = "pending"
+				allowTrigger = requestedGroupPolicyFlag(input.AllowTrigger, true)
+				allowContext = requestedGroupPolicyFlag(input.AllowContext, false)
+			}
+		}
+
+		// Active is the only state which can add the Bot to a conversation. The
+		// settings gate is checked at the point of activation, so a pending
+		// owner request cannot silently change Bot configuration or gain access.
+		if status == "active" && (!settings.AllowGroup || (settings.VisibilityPolicy == VisibilityPrivate && settings.AccessPolicy == nil)) {
+			return mutationResult{}, rejected(forbiddenError(CodeBotGroupPolicyForbidden, MessageBotGroupPolicyForbidden)), nil
+		}
+
+		if (status == "removed" || status == "rejected") && existingPolicy == nil {
+			return mutationResult{}, rejected(forbiddenError(CodeBotGroupPolicyForbidden, "只能撤销已有的 Bot 群聊授权")), nil
+		}
 		grantID := ""
 		if existing != nil {
 			grantID = existing.GrantID
+		}
+		if grantID == "" && existingPolicy != nil {
+			grantID = valueOrEmpty(existingPolicy.GrantID)
 		}
 		if grantID == "" {
 			id, idErr := s.newID("group grant")
@@ -779,19 +919,57 @@ func (s *Service) UpdateGroupPolicy(ctx context.Context, input UpdateGroupPolicy
 			}
 			grantID = "grant_" + id
 		}
-		policy := GroupPolicyRecord{BotID: bot.ID, SpaceID: spaceID, ConversationID: conversationID, Status: status,
-			InvitedBy: stringPtr(actor.ID), MaxContextMessages: cloneInt(input.MaxMessages), CreatedAt: now, UpdatedAt: now,
-			GrantID: stringPtr(grantID), AllowTrigger: allowTrigger, AllowContext: allowContext,
-			ContextMaxMessages: cloneInt(input.MaxMessages)}
+		createdAt := now
+		if existingPolicy != nil && !existingPolicy.CreatedAt.IsZero() {
+			createdAt = existingPolicy.CreatedAt
+		}
+		maxMessages := cloneInt(input.MaxMessages)
+		if maxMessages == nil && existingPolicy != nil {
+			maxMessages = cloneInt(existingPolicy.MaxContextMessages)
+			if maxMessages == nil {
+				maxMessages = cloneInt(existingPolicy.ContextMaxMessages)
+			}
+		}
+		if !actorIsOwner && input.MaxMessages != nil {
+			maxMessages = cloneInt(input.MaxMessages)
+		}
+		invitedBy := stringPtr(bot.OwnerUserID)
+		if existingPolicy != nil && !actorIsOwner && valueOrEmpty(existingPolicy.InvitedBy) == bot.OwnerUserID {
+			invitedBy = cloneString(existingPolicy.InvitedBy)
+		}
+		var approvedBy *string
 		if status == "active" {
-			policy.ApprovedBy = stringPtr(actor.ID)
+			if actorIsOwner {
+				if ownerIsManager {
+					approvedBy = stringPtr(actor.ID)
+				} else if existingPolicy != nil && existingPolicy.Status == "active" {
+					approvedBy = cloneString(existingPolicy.ApprovedBy)
+				}
+			} else {
+				approvedBy = stringPtr(actor.ID)
+			}
+		}
+		if status != "active" {
+			approvedBy = nil
+		}
+		policy := GroupPolicyRecord{BotID: bot.ID, SpaceID: spaceID, ConversationID: conversationID, Status: status,
+			InvitedBy: invitedBy, ApprovedBy: approvedBy, MaxContextMessages: cloneInt(maxMessages), CreatedAt: createdAt, UpdatedAt: now,
+			GrantID: stringPtr(grantID), AllowTrigger: allowTrigger, AllowContext: allowContext,
+			ContextMaxMessages: cloneInt(maxMessages)}
+		grantCreatedAt := now
+		if existing != nil && !existing.CreatedAt.IsZero() {
+			grantCreatedAt = existing.CreatedAt
+		}
+		grantedBy := stringPtr(bot.OwnerUserID)
+		if existing != nil && existing.GrantedBy != nil {
+			grantedBy = cloneString(existing.GrantedBy)
 		}
 		if err := tx.UpsertGroupPolicy(ctx, policy); err != nil {
 			return mutationResult{}, nil, err
 		}
 		grant := ContextGrantRecord{GrantID: grantID, BotID: bot.ID, SpaceID: spaceID, ConversationID: conversationID,
-			AllowTrigger: allowTrigger, AllowContext: allowContext, MaxMessages: cloneInt(input.MaxMessages),
-			GrantedBy: stringPtr(actor.ID), CreatedAt: now, UpdatedAt: now}
+			AllowTrigger: allowTrigger, AllowContext: allowContext, MaxMessages: cloneInt(maxMessages),
+			GrantedBy: grantedBy, CreatedAt: grantCreatedAt, UpdatedAt: now}
 		if err := tx.UpsertContextGrant(ctx, grant); err != nil {
 			return mutationResult{}, nil, err
 		}
@@ -799,7 +977,7 @@ func (s *Service) UpdateGroupPolicy(ctx context.Context, input UpdateGroupPolicy
 			if err := tx.SetConversationMember(ctx, conversationID, bot.BotUserID, true, now); err != nil {
 				return mutationResult{}, nil, err
 			}
-		} else if status == "removed" || status == "rejected" {
+		} else {
 			if err := tx.SetConversationMember(ctx, conversationID, bot.BotUserID, false, now); err != nil {
 				return mutationResult{}, nil, err
 			}
@@ -810,6 +988,13 @@ func (s *Service) UpdateGroupPolicy(ctx context.Context, input UpdateGroupPolicy
 		return GroupPolicy{}, err
 	}
 	return result.value.(GroupPolicy), nil
+}
+
+func requestedGroupPolicyFlag(value *bool, fallback bool) bool {
+	if value == nil {
+		return fallback
+	}
+	return *value
 }
 
 func (s *Service) UpdateContextGrant(ctx context.Context, input UpdateContextGrantInput) (ContextGrant, error) {
@@ -1979,12 +2164,28 @@ func hasPatch(input UpdateSettingsInput, key string) bool {
 		return input.AllowAttachmentPreview != nil
 	case "longTermSummaryEnabled":
 		return input.LongTermSummaryEnabled != nil
+	case "accessPolicy":
+		if input.AccessPolicy != nil {
+			return true
+		}
+		_, ok := input.Patch[key]
+		return ok
 	default:
 		return false
 	}
 }
 
+func legacyPermissionPatch(input UpdateSettingsInput) bool {
+	for _, key := range []string{"visibilityPolicy", "allowedMemberIds", "allowDirect", "allowGroup", "groupInviterPolicy", "requireOwnerApproval", "triggerPolicy"} {
+		if hasPatch(input, key) {
+			return true
+		}
+	}
+	return false
+}
+
 func applySettingsPatch(current SettingsRecord, input UpdateSettingsInput, at time.Time) (SettingsRecord, *Error) {
+	accessPolicyPatched := hasPatch(input, "accessPolicy")
 	patch := make(map[string]any, len(input.Patch)+20)
 	for key, value := range input.Patch {
 		patch[key] = value
@@ -2052,12 +2253,15 @@ func applySettingsPatch(current SettingsRecord, input UpdateSettingsInput, at ti
 	if input.LongTermSummaryEnabled != nil {
 		patch["longTermSummaryEnabled"] = *input.LongTermSummaryEnabled
 	}
+	if input.AccessPolicy != nil {
+		patch["accessPolicy"] = *input.AccessPolicy
+	}
 	known := map[string]struct{}{
 		"visibilityPolicy": {}, "allowedMemberIds": {}, "allowDirect": {}, "allowGroup": {}, "groupInviterPolicy": {},
 		"requireOwnerApproval": {}, "proactiveEnabled": {}, "triggerPolicy": {}, "welcomeMessage": {}, "description": {},
 		"avatarUrl": {}, "showCreator": {}, "maxContextMessages": {}, "maxContextChars": {}, "maxContextTokens": {},
 		"contextWindowSeconds": {}, "includeReplies": {}, "includeSystemEvents": {}, "includeAttachmentMetadata": {},
-		"allowAttachmentPreview": {}, "longTermSummaryEnabled": {},
+		"allowAttachmentPreview": {}, "longTermSummaryEnabled": {}, "accessPolicy": {},
 	}
 	for key := range patch {
 		if _, ok := known[key]; !ok {
@@ -2117,6 +2321,33 @@ func applySettingsPatch(current SettingsRecord, input UpdateSettingsInput, at ti
 			case "longTermSummaryEnabled":
 				current.LongTermSummaryEnabled = valueBool
 			}
+		case "accessPolicy":
+			if value == nil {
+				current.AccessPolicy = nil
+				continue
+			}
+			policy, ok := value.(botpolicy.Policy)
+			if !ok {
+				if pointer, pointerOK := value.(*botpolicy.Policy); pointerOK && pointer != nil {
+					policy, ok = *pointer, true
+				}
+			}
+			if !ok {
+				encoded, marshalErr := json.Marshal(value)
+				if marshalErr != nil {
+					return SettingsRecord{}, validationError(CodeBotInvalidSettings, "V2 权限策略无效")
+				}
+				parsed, parseErr := botpolicy.Parse(encoded)
+				if parseErr != nil || parsed == nil {
+					return SettingsRecord{}, validationError(CodeBotInvalidSettings, "V2 权限策略无效")
+				}
+				policy, ok = *parsed, true
+			}
+			normalized, policyErr := botpolicy.Normalize(policy)
+			if policyErr != nil {
+				return SettingsRecord{}, validationError(CodeBotInvalidSettings, "V2 权限策略无效")
+			}
+			current.AccessPolicy = &normalized
 		case "groupInviterPolicy":
 			valueString, ok := value.(string)
 			if !ok || !contains([]string{"owner", "group_admin", "any_member"}, valueString) {
@@ -2185,6 +2416,14 @@ func applySettingsPatch(current SettingsRecord, input UpdateSettingsInput, at ti
 				current.ContextWindowSeconds = valueInt
 			}
 		}
+	}
+	// V2 is an explicit capability boundary. Once a request writes (or clears)
+	// that boundary, keep the legacy directory fields conservative so old
+	// readers cannot reinterpret an owner-only policy as a public bot. This is
+	// deliberately after map iteration to make the result deterministic.
+	if accessPolicyPatched {
+		current.VisibilityPolicy = VisibilityPrivate
+		current.AllowedMemberIDs = nil
 	}
 	current.UpdatedAt = at
 	if current.AllowedMemberIDs == nil {

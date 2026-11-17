@@ -261,6 +261,7 @@ func withBotGatewayAuth(options BotGatewayRouteOptions, handler botGatewayAuthHa
 			writeError(response, botgateway.NewError(botgateway.CodeInvalidToken, botgateway.MessageInvalidToken, http.StatusUnauthorized))
 			return
 		}
+		request = request.WithContext(botgateway.WithAgentTaskID(request.Context(), request.Header.Get(botgateway.AgentTaskHeader)))
 		handler(response, request, value)
 	}
 }

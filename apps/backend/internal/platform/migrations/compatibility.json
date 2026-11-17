@@ -13,6 +13,10 @@
     {
       "name": "036_v1_clean_architecture.sql",
       "sha256": "2649cdb3baf4130cee7040a492869db161dd89cae52c3afd27bc8bad922f28f4"
+    },
+    {
+      "name": "037_agent_task_authorization.sql",
+      "sha256": "5003a7f2c6dcc32f336a3b20f4730fa8c6e5208d6551ae7ffe460c45eca21b03"
     }
   ]
 }

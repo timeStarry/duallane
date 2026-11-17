@@ -14,6 +14,9 @@ const sourceFiles = [
   "src/transport.js",
   "src/base64.js",
   "src/file-input.js",
+  "src/message-content.js",
+  "src/task-client.js",
+  "src/task-tools.js",
   "src/index.js",
   "src/media.js",
   "src/inbound.js",
@@ -31,6 +34,7 @@ function stripImportsAndReexports(code, relPath) {
   let out = code.replace(/^#!\/usr\/bin\/env node\s*\n/u, "");
   // Strip multi-line and single-line ES imports (node:* builtins are emitted once in header)
   out = out.replace(/^import\s+[\s\S]*?from\s+["'][^"']+["'];?\s*$/gmu, "");
+  out = out.replace(/^export\s*\{[^}]*\}\s*from\s*["'][^"']+["'];?\s*$/gmu, "");
   if (relPath === "bin/duallane-agent.mjs") {
     // Symbols from src/*.js are already exported at declaration
     out = out.replace(/^export\s*\{[\s\S]*?\};\s*$/gmu, "");
@@ -101,10 +105,14 @@ const manifestPayload =
       byteSize: bundleBytes.byteLength,
       downloadPath: "/integrations/duallane-agent.mjs",
       documentationPath: "/integrations/v2/duallane-channel.md",
+      skillPath: "/integrations/duallane-agent/SKILL.md",
       minNodeVersion: "20.0.0",
       buildId: crypto.createHash("sha256").update(sections.join("\n")).digest("hex"),
       compatibility: { gatewayVersion: 1, bridgeProtocolVersion: 1 },
       highlights: [
+        "任务限定的历史、消息、成员与附件工具，受控提及和机器人协作",
+        "按需上下文与查询覆盖说明；条件修改和未知操作结果协调",
+        "接入 Skill 明确聊天能力、外部 Agent 工具与授权边界",
         "修复较大图片内联编码触发解析失败，严格校验编码和文件大小边界",
         "恢复机器人执行期间的思考状态，任务结束、失败或取消后停止续租",
         "通用命令桥接采用版本化任务与产物协议，支持受控媒体获取和授权入站附件",

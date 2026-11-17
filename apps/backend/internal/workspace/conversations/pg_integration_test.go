@@ -143,6 +143,68 @@ func TestPGConversationServiceUsesIsolatedSchemaAndAtomicMutations(t *testing.T)
 	if group.Type != string(ConversationTypeGroup) || len(group.Members) != 2 {
 		t.Fatalf("group conversation = %#v", group)
 	}
+	// An explicit V2 owner-only DM must not remain in a non-owner's
+	// conversation list merely because the old conversation membership exists.
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO users (id, github_login, display_name, kind, created_at)
+		VALUES ('bot_v2_private', '__duallane_v2_private__', 'Private Bot', 'bot', $1)
+	`, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO space_members (space_id, user_id, role, joined_at, removed_at)
+		VALUES ($1, 'bot_v2_private', 'member', $2, NULL)
+	`, DefaultSpaceID, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO workspace_agent_bots (id, space_id, owner_user_id, bot_user_id, mode, name, name_normalized, visibility_policy, conversation_policy, trigger_policy, status, created_at, updated_at)
+		VALUES ('bot_v2_private', $1, 'usr_owner', 'bot_v2_private', 'external_agent', 'Private Bot', 'private bot', 'private', 'direct-only', 'mention-or-command', 'active', $2, $2)
+	`, DefaultSpaceID, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO workspace_agent_bot_settings (bot_id, space_id, visibility_policy, allow_direct, allow_group, access_policy, created_at, updated_at)
+		VALUES ('bot_v2_private', $1, 'private', 1, 0, $2::jsonb, $3, $3)
+	`, DefaultSpaceID, `{"version":2,"discovery":{"audience":"owner_only"},"direct":{"audience":"owner_only"},"groups":{"audience":"owner_only","allowBotTriggers":false}}`, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO conversations (id, space_id, type, title, direct_key, created_by, created_at)
+		VALUES ('conv_v2_private', $1, 'direct', 'Private Bot DM', 'v2-private-direct', 'usr_owner', $2)
+	`, DefaultSpaceID, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO conversation_members (conversation_id, user_id, joined_at, removed_at)
+		VALUES ('conv_v2_private', 'usr_owner', $1, NULL), ('conv_v2_private', 'usr_direct_target', $1, NULL), ('conv_v2_private', 'bot_v2_private', $1, NULL)
+	`, now); err != nil {
+		t.Fatal(err)
+	}
+	conversationRepo := NewPGRepository(pool, idFactory)
+	targetConversations, err := conversationRepo.ListConversationRecords(ctx, DefaultSpaceID, "usr_direct_target")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range targetConversations {
+		if item.ID == "conv_v2_private" {
+			t.Fatal("V2 owner-only DM leaked to non-owner conversation list")
+		}
+	}
+	ownerConversations, err := conversationRepo.ListConversationRecords(ctx, DefaultSpaceID, "usr_owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundOwnerDM := false
+	for _, item := range ownerConversations {
+		if item.ID == "conv_v2_private" {
+			foundOwnerDM = true
+			break
+		}
+	}
+	if !foundOwnerDM {
+		t.Fatal("V2 owner-only DM missing from owner conversation list")
+	}
 
 	assertNoConversationMembership(t, ctx, pool, "usr_added_target")
 	if _, err := service.AddMember(ctx, ConversationMemberInput{

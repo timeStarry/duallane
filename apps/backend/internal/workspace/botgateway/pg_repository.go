@@ -11,7 +11,9 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/botpolicy"
 	workspacecards "github.com/timestarry/duallane/apps/backend/internal/workspace/cards"
+	workspacefiles "github.com/timestarry/duallane/apps/backend/internal/workspace/files"
 	workspacemessages "github.com/timestarry/duallane/apps/backend/internal/workspace/messages"
 )
 
@@ -26,6 +28,7 @@ type PGRepository struct {
 	idFactory         func() (string, error)
 	messageRepository *workspacemessages.PGRepository
 	cardRepository    *workspacecards.PGRepository
+	fileRepository    *workspacefiles.PGRepository
 }
 
 // DomainTransactionOptions supplies the already-configured domain adapters to
@@ -35,6 +38,7 @@ type PGRepository struct {
 type DomainTransactionOptions struct {
 	Messages *workspacemessages.PGRepository
 	Cards    *workspacecards.PGRepository
+	Files    *workspacefiles.PGRepository
 }
 
 func NewPGRepository(pool *pgxpool.Pool, factories ...func() (string, error)) *PGRepository {
@@ -58,6 +62,7 @@ func NewPGRepositoryWithDomainTransactions(pool *pgxpool.Pool, domains DomainTra
 	repository := NewPGRepository(pool, factories...)
 	repository.messageRepository = domains.Messages
 	repository.cardRepository = domains.Cards
+	repository.fileRepository = domains.Files
 	return repository
 }
 
@@ -212,6 +217,7 @@ func (r *PGRepository) GetSettings(ctx context.Context, botID, spaceID string) (
 
 func getSettings(ctx context.Context, queryer pgQueryer, botID, spaceID string) (*Settings, error) {
 	var value Settings
+	var accessPolicy []byte
 	err := queryer.QueryRow(ctx, `
 		SELECT visibility_policy, allow_direct = 1, allow_group = 1,
 		       group_inviter_policy, require_owner_approval = 1, proactive_enabled = 1,
@@ -220,7 +226,7 @@ func getSettings(ctx context.Context, queryer pgQueryer, botID, spaceID string) 
 		       max_context_messages, max_context_chars, max_context_tokens,
 		       context_window_seconds, include_replies = 1, include_system_events = 1,
 		       include_attachment_metadata = 1, allow_attachment_preview = 1,
-		       long_term_summary_enabled = 1
+		       long_term_summary_enabled = 1, access_policy
 		FROM workspace_agent_bot_settings
 		WHERE bot_id = $1 AND space_id = $2
 	`, botID, spaceID).Scan(&value.VisibilityPolicy, &value.AllowDirect, &value.AllowGroup,
@@ -229,12 +235,16 @@ func getSettings(ctx context.Context, queryer pgQueryer, botID, spaceID string) 
 		&value.ShowCreator, &value.MaxContextMessages, &value.MaxContextChars,
 		&value.MaxContextTokens, &value.ContextWindowSeconds, &value.IncludeReplies,
 		&value.IncludeSystemEvents, &value.IncludeAttachmentMetadata, &value.AllowAttachmentPreview,
-		&value.LongTermSummaryEnabled)
+		&value.LongTermSummaryEnabled, &accessPolicy)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, internalError("read bot gateway settings", err)
+	}
+	value.AccessPolicy, err = botpolicy.Parse(accessPolicy)
+	if err != nil {
+		return nil, internalError("read bot access policy", err)
 	}
 	return &value, nil
 }
@@ -471,7 +481,7 @@ func listContextMessages(ctx context.Context, queryer pgQueryer, spaceID, conver
 		SELECT id, conversation_id, COALESCE(author_id, ''), author_kind, kind, content_format,
 		       content_json, plain_text, reply_to_message_id, created_at
 		FROM messages
-		WHERE space_id = $1 AND conversation_id = $2 AND deleted_at IS NULL AND created_at >= $3
+		WHERE space_id = $1 AND conversation_id = $2 AND topic_id IS NULL AND deleted_at IS NULL AND recalled_at IS NULL AND created_at >= $3
 	`
 	args := []any{spaceID, conversationID, since.UTC()}
 	if !includeReplies {
@@ -772,7 +782,7 @@ func getMessageTrigger(ctx context.Context, queryer pgQueryer, spaceID, conversa
 			m.deleted_at,
 			m.recalled_at
 		FROM messages m
-		WHERE m.id = $1 AND m.space_id = $2 AND m.conversation_id = $3
+		WHERE m.id = $1 AND m.space_id = $2 AND m.conversation_id = $3 AND m.topic_id IS NULL
 	`, messageID, spaceID, conversationID).Scan(
 		&value.AuthorID,
 		&value.ReplyToAuthorID,

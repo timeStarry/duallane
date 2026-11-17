@@ -48,6 +48,18 @@ import {
   type BotAvatarColor,
 } from "@/shared/ui";
 import { cn } from "@/shared/lib/cn";
+import {
+  buildBotAccessPolicyPatch,
+  cloneBotAccessPolicy,
+  describeBotAccessPolicy,
+  isSelectableBotSourceMember,
+  makePrivateAssistantGroupPolicy,
+  parseBotAccessPolicy,
+  toggleStringId,
+  type BotAccessPolicy,
+  type BotGroupAudience,
+  type BotPolicyAudience,
+} from "./bot-access-policy";
 
 type BotChapterId = "runtime" | "permissions" | "persona" | "extensions";
 type GroupAccessPreset = "disabled" | "owner_only" | "approval_required" | "open";
@@ -65,6 +77,7 @@ interface BotItem {
 }
 
 interface BotSettingsData {
+  accessPolicy: BotAccessPolicy | null;
   visibilityPolicy: "private" | "specified_members" | "space_members" | string;
   allowDirect: boolean;
   allowGroup: boolean;
@@ -77,8 +90,13 @@ interface BotSettingsData {
   welcomeMessage: string;
   avatarUrl: string;
   maxContextMessages: number;
+  maxContextChars: number;
+  maxContextTokens: number;
+  contextWindowSeconds: number;
   includeReplies: boolean;
+  includeSystemEvents: boolean;
   includeAttachmentMetadata: boolean;
+  allowAttachmentPreview: boolean;
 }
 
 const VALID_SCOPES = [
@@ -89,10 +107,14 @@ const VALID_SCOPES = [
   { id: "cards:act", label: "接收卡片交互" },
   { id: "commands:receive", label: "接收 Slash 指令" },
   { id: "files:read_metadata", label: "读取附件元数据" },
+  { id: "files:read_preview", label: "读取附件预览（受限）" },
+  { id: "files:read_content", label: "读取附件完整内容（敏感）" },
   { id: "files:write", label: "上传生成文件" },
 ];
 
-const DEFAULT_PAIRING_SCOPES = VALID_SCOPES.map((item) => item.id);
+const DEFAULT_PAIRING_SCOPES = VALID_SCOPES
+  .filter((item) => item.id !== "files:read_preview" && item.id !== "files:read_content")
+  .map((item) => item.id);
 
 const SCOPE_LABEL_MAP: Record<string, string> = Object.fromEntries(
   VALID_SCOPES.map((item) => [item.id, item.label])
@@ -165,7 +187,7 @@ function formatBlockReason(reason?: string): string {
     case "group_disabled":
       return "未开启群聊准入";
     case "group_pending_approval":
-      return "待创建者审批";
+      return "等待群管理员批准";
     case "group_not_authorized":
       return "群聊尚未授权";
     default:
@@ -309,6 +331,7 @@ export function BotSettingsPanel() {
     isPreviewMode ? "bot_echo_1" : ""
   );
   const [settings, setSettings] = useState<BotSettingsData>({
+    accessPolicy: null,
     visibilityPolicy: isPreviewMode ? "space_members" : "private",
     allowDirect: true,
     allowGroup: true,
@@ -321,8 +344,13 @@ export function BotSettingsPanel() {
     welcomeMessage: "",
     avatarUrl: "",
     maxContextMessages: 50,
+    maxContextChars: 20_000,
+    maxContextTokens: 8_000,
+    contextWindowSeconds: 86_400,
     includeReplies: true,
+    includeSystemEvents: false,
     includeAttachmentMetadata: false,
+    allowAttachmentPreview: false,
   });
   const [tokens, setTokens] = useState<BotTokenRecord[]>(() =>
     isPreviewMode
@@ -408,7 +436,9 @@ export function BotSettingsPanel() {
       unknown
     >;
     const rawVis = String(s.visibilityPolicy || "private");
+    const accessPolicy = parseBotAccessPolicy(s.accessPolicy);
     setSettings({
+      accessPolicy,
       visibilityPolicy: normalizeMemberVisibility(rawVis),
       allowDirect: s.allowDirect !== false,
       allowGroup: rawVis === "groups" ? true : s.allowGroup !== false,
@@ -421,8 +451,13 @@ export function BotSettingsPanel() {
       welcomeMessage: typeof s.welcomeMessage === "string" ? s.welcomeMessage : "",
       avatarUrl: typeof s.avatarUrl === "string" ? s.avatarUrl : "",
       maxContextMessages: Number(ctxObj.maxMessages || s.maxContextMessages || 50),
+      maxContextChars: Number(ctxObj.maxChars || s.maxContextChars || 20_000),
+      maxContextTokens: Number(ctxObj.maxTokens || s.maxContextTokens || 8_000),
+      contextWindowSeconds: Number(ctxObj.windowSeconds || s.contextWindowSeconds || 86_400),
       includeReplies: ctxObj.includeReplies !== false,
+      includeSystemEvents: Boolean(ctxObj.includeSystemEvents),
       includeAttachmentMetadata: Boolean(ctxObj.includeAttachmentMetadata),
+      allowAttachmentPreview: Boolean(ctxObj.allowAttachmentPreview),
     });
   }, []);
 
@@ -911,15 +946,17 @@ export function BotSettingsPanel() {
   ) => {
     if (!activeBot) return;
     setErrorMessage("");
+    let returnedGroupStatus: string | undefined;
     try {
       if (!isPreviewMode) {
         if (conv.type === "group") {
-          await apiV1.updateBotGroupPolicy(activeBot.id, conv.id, {
+          const result = await apiV1.updateBotGroupPolicy(activeBot.id, conv.id, {
             status: "active",
             allowTrigger: true,
             allowContext: nextContextEnabled,
             maxMessages: settings.maxContextMessages || 50,
           });
+          returnedGroupStatus = result.policy?.status;
         } else {
           await apiV1.updateBotContextGrant(activeBot.id, conv.id, {
             allowTrigger: true,
@@ -928,6 +965,10 @@ export function BotSettingsPanel() {
           });
         }
         await refreshBotRuntimeState(activeBot.id);
+      }
+      if (conv.type === "group" && returnedGroupStatus === "pending") {
+        setStatusMessage("已提交入群请求，等待群管理员批准；当前尚未激活");
+        return;
       }
       setStatusMessage(
         nextContextEnabled
@@ -1274,6 +1315,77 @@ export function BotSettingsPanel() {
   const connectedSdkVer = extractSemverFromAdapter(connection?.adapterVersion);
   const sdkUpdateAvailable = isSemverOlder(connectedSdkVer, latestSdkVersion);
   const groupPreset = resolveGroupAccessPreset(settings);
+  const activeAccessPolicy = settings.accessPolicy;
+  const accessPolicyEnabled = activeAccessPolicy !== null;
+  const selectableBotSources = Object.values(members).filter((member) =>
+    isSelectableBotSourceMember(member, activeBot?.botUserId)
+  );
+  const accessPolicySummary = activeAccessPolicy
+    ? describeBotAccessPolicy(activeAccessPolicy)
+    : "沿用当前旧版权限规则；尚未启用独立的发现、私聊与群内来源策略";
+
+  const updateAccessPolicy = (update: (current: BotAccessPolicy) => BotAccessPolicy, notice: string) => {
+    const current = settings.accessPolicy || makePrivateAssistantGroupPolicy();
+    const next = update(cloneBotAccessPolicy(current));
+    void patchSettings(buildBotAccessPolicyPatch(next), notice);
+  };
+
+  const enableAccessPolicy = () => {
+    void patchSettings(
+      buildBotAccessPolicyPatch(makePrivateAssistantGroupPolicy()),
+      "已启用独立权限策略：仅创建者私聊，获批群内当前成员可使用"
+    );
+  };
+
+  const renderMemberPicker = (
+    title: string,
+    memberIds: readonly string[],
+    updateMemberIds: (current: BotAccessPolicy, memberId: string) => BotAccessPolicy
+  ) => (
+    <div className="rounded-lg border border-dl-border-hairline p-2.5 space-y-2">
+      <div className="text-[11px] font-medium text-dl-text-secondary">{title}</div>
+      <div className="grid gap-1.5 sm:grid-cols-2">
+        {Object.values(members)
+          .filter((member) => member.role !== "bot")
+          .map((member) => {
+            const selected = memberIds.includes(member.id);
+            return (
+              <Button
+                key={member.id}
+                type="button"
+                size="sm"
+                variant="ghost"
+                aria-pressed={selected}
+                aria-label={`${member.displayName}：${selected ? "已允许" : "未允许"}`}
+                className={cn(
+                  "w-full justify-between px-2.5 text-left",
+                  selected && "bg-dl-lane-shared/10 text-dl-lane-shared"
+                )}
+                onClick={() =>
+                  updateAccessPolicy(
+                    (current) => updateMemberIds(current, member.id),
+                    `${title}已更新`
+                  )
+                }
+              >
+                <span className="truncate">{member.displayName}</span>
+                <span className="shrink-0 text-[10px] text-dl-text-tertiary">
+                  {selected ? "已允许" : "未允许"}
+                </span>
+              </Button>
+            );
+          })}
+        {Object.values(members).filter((member) => member.role !== "bot").length === 0 && (
+          <div className="text-[11px] text-dl-text-tertiary sm:col-span-2">
+            当前空间没有可选的人类成员。
+          </div>
+        )}
+      </div>
+      <div className="text-[10px] leading-4 text-dl-text-tertiary">
+        只影响“{title}”这一项；其他维度的名单保持独立。
+      </div>
+    </div>
+  );
 
   const activeBotAvatarUrl =
     settings.avatarUrl ||
@@ -1870,16 +1982,249 @@ export function BotSettingsPanel() {
                 <div className="flex items-center gap-2 min-w-0">
                   <Lock className="size-3.5 text-dl-lane-shared shrink-0" strokeWidth={2.1} />
                   <div className="text-xs text-dl-text-primary">
-                    <span className="font-semibold">创建者本人私聊永久保留</span>
+                    <span className="font-semibold">创建者保留私聊资格</span>
                     <span className="text-dl-text-secondary">
-                      {" · 无论下方成员范围如何调整，你本人的 1v1 私聊始终允许触发与对话"}
+                      {" · 允许私聊时，创建者始终在准入范围内；关闭私聊或停用机器人仍会生效"}
                     </span>
                   </div>
                 </div>
               </div>
 
+              {/* Explicit v2 policy: legacy settings remain untouched until the owner opts in. */}
+              <div
+                data-testid="bot-access-policy"
+                className={cn(
+                  "rounded-xl border p-3.5 space-y-3",
+                  accessPolicyEnabled
+                    ? "border-dl-lane-shared/30 bg-dl-lane-shared/[0.035]"
+                    : "border-dl-border-hairline"
+                )}
+              >
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="min-w-0 space-y-1">
+                    <div className="text-xs font-semibold text-dl-text-primary">
+                      独立权限策略（发现、私聊、群内使用）
+                    </div>
+                    <div className="text-[11px] leading-5 text-dl-text-tertiary">
+                      {accessPolicySummary}
+                    </div>
+                    <div className="text-[10px] leading-4 text-dl-text-tertiary">
+                      推荐预设：私有助手，指定群共享（群邀请、创建者同意与群管理仍在下方独立设置）
+                    </div>
+                  </div>
+                  {!accessPolicyEnabled && (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="primary"
+                      onClick={enableAccessPolicy}
+                      disabled={busyAction !== ""}
+                      className="shrink-0"
+                    >
+                      启用“私有助手，指定群共享”
+                    </Button>
+                  )}
+                </div>
+
+                {!activeAccessPolicy ? (
+                  <div className="rounded-lg bg-dl-surface-subtle/60 px-3 py-2 text-[11px] leading-5 text-dl-text-secondary">
+                    旧版设置不会在打开页面时自动转换。启用后，目录发现、私聊准入和群内使用会分别保存；
+                    群内当前成员可用也不会自动开放其他 Bot 互相触发。
+                    启用前请先将助手运行包升级到 1.2，并按接入 Skill 确认会话任务工具可用。
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <label className="space-y-1.5">
+                        <span className="text-[11px] font-medium text-dl-text-secondary">目录发现</span>
+                        <Select
+                          value={activeAccessPolicy.discovery.audience}
+                          onValueChange={(value) =>
+                            updateAccessPolicy(
+                              (current) => ({
+                                ...current,
+                                discovery: {
+                                  ...current.discovery,
+                                  audience: value as BotPolicyAudience,
+                                },
+                              }),
+                              "目录发现范围已更新"
+                            )
+                          }
+                          options={[
+                            { value: "owner_only", label: "仅创建者可发现" },
+                            { value: "specified_members", label: "创建者与指定成员" },
+                            { value: "space_members", label: "空间成员" },
+                          ]}
+                        />
+                      </label>
+                      <label className="space-y-1.5">
+                        <span className="text-[11px] font-medium text-dl-text-secondary">发起私聊</span>
+                        <Select
+                          value={activeAccessPolicy.direct.audience}
+                          onValueChange={(value) =>
+                            updateAccessPolicy(
+                              (current) => ({
+                                ...current,
+                                direct: {
+                                  ...current.direct,
+                                  audience: value as BotPolicyAudience,
+                                },
+                              }),
+                              "私聊准入范围已更新"
+                            )
+                          }
+                          options={[
+                            { value: "owner_only", label: "仅创建者可私聊" },
+                            { value: "specified_members", label: "创建者与指定成员" },
+                            { value: "space_members", label: "空间成员" },
+                          ]}
+                        />
+                      </label>
+                      <label className="space-y-1.5 md:col-span-2">
+                        <span className="text-[11px] font-medium text-dl-text-secondary">已批准群内的使用者</span>
+                        <Select
+                          value={activeAccessPolicy.groups.audience}
+                          onValueChange={(value) =>
+                            updateAccessPolicy(
+                              (current) => ({
+                                ...current,
+                                groups: {
+                                  ...current.groups,
+                                  audience: value as BotGroupAudience,
+                                },
+                              }),
+                              "群内使用范围已更新"
+                            )
+                          }
+                          options={[
+                            { value: "owner_only", label: "仅创建者可在群内使用" },
+                            { value: "specified_members", label: "创建者与指定成员" },
+                            { value: "current_members", label: "该群当前成员（推荐）" },
+                          ]}
+                        />
+                      </label>
+                    </div>
+
+                    {activeAccessPolicy.discovery.audience === "specified_members" &&
+                      renderMemberPicker(
+                        "可发现成员",
+                        activeAccessPolicy.discovery.memberIds,
+                        (current, memberId) => ({
+                          ...current,
+                          discovery: {
+                            ...current.discovery,
+                            memberIds: toggleStringId(current.discovery.memberIds, memberId),
+                          },
+                        })
+                      )}
+                    {activeAccessPolicy.direct.audience === "specified_members" &&
+                      renderMemberPicker(
+                        "可发起私聊的成员",
+                        activeAccessPolicy.direct.memberIds,
+                        (current, memberId) => ({
+                          ...current,
+                          direct: {
+                            ...current.direct,
+                            memberIds: toggleStringId(current.direct.memberIds, memberId),
+                          },
+                        })
+                      )}
+                    {activeAccessPolicy.groups.audience === "specified_members" &&
+                      renderMemberPicker(
+                        "可在已批准群内使用的成员",
+                        activeAccessPolicy.groups.memberIds,
+                        (current, memberId) => ({
+                          ...current,
+                          groups: {
+                            ...current.groups,
+                            memberIds: toggleStringId(current.groups.memberIds, memberId),
+                          },
+                        })
+                      )}
+
+                    <div className="rounded-lg bg-dl-surface-subtle/60 px-3 py-2.5 space-y-2">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <div className="text-xs font-medium text-dl-text-primary">允许其他 Bot 触发</div>
+                          <div className="text-[11px] leading-5 text-dl-text-tertiary">
+                            默认关闭。开启后仍需逐个指定来源 Bot，并受服务端因果链、预算和停止控制约束。
+                          </div>
+                        </div>
+                        <Switch
+                          label="允许其他 Bot 触发"
+                          checked={activeAccessPolicy.groups.allowBotTriggers}
+                          onCheckedChange={(checked) =>
+                            updateAccessPolicy(
+                              (current) => ({
+                                ...current,
+                                groups: {
+                                  ...current.groups,
+                                  allowBotTriggers: checked,
+                                  allowedBotIds: checked ? current.groups.allowedBotIds : [],
+                                },
+                              }),
+                              checked ? "已开启受控 Bot 来源触发" : "已关闭 Bot 来源触发"
+                            )
+                          }
+                        />
+                      </div>
+                      {activeAccessPolicy.groups.allowBotTriggers && (
+                        <div className="grid gap-1.5 sm:grid-cols-2">
+                          {selectableBotSources.map((member) => {
+                            const botId = member.botId.trim();
+                            const selected = activeAccessPolicy.groups.allowedBotIds.includes(botId);
+                            return (
+                              <Button
+                                key={member.id}
+                                type="button"
+                                size="sm"
+                                variant="ghost"
+                                aria-pressed={selected}
+                                aria-label={`${member.displayName}：${selected ? "已允许" : "未允许"}`}
+                                className={cn(
+                                  "w-full justify-between px-2.5 text-left",
+                                  selected && "bg-dl-lane-shared/10 text-dl-lane-shared"
+                                )}
+                                onClick={() =>
+                                  updateAccessPolicy(
+                                    (current) => ({
+                                      ...current,
+                                      groups: {
+                                        ...current.groups,
+                                        allowedBotIds: toggleStringId(current.groups.allowedBotIds, botId),
+                                      },
+                                    }),
+                                    "允许来源 Bot 已更新"
+                                  )
+                                }
+                              >
+                                <span className="truncate">{member.displayName}</span>
+                                <span className="text-[10px] text-dl-text-tertiary">
+                                  {selected ? "已允许" : "未允许"}
+                                </span>
+                              </Button>
+                            );
+                          })}
+                          {selectableBotSources.length === 0 && (
+                            <div className="text-[11px] text-dl-text-tertiary sm:col-span-2">
+                              当前空间没有可选的其他 Bot；开启后仍不会自动允许未来新增的 Bot。
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+
               {/* Axis 1: Member Discovery & Direct Chat Scope */}
-              <div className="rounded-xl border border-dl-border-hairline p-3.5 space-y-3">
+              <div
+                className={cn(
+                  "rounded-xl border border-dl-border-hairline p-3.5 space-y-3",
+                  accessPolicyEnabled && "hidden"
+                )}
+              >
                 <div className="space-y-1">
                   <div className="text-xs font-semibold text-dl-text-primary">
                     1. 成员可用范围（谁可以发现并与机器人私聊）
@@ -2235,6 +2580,29 @@ export function BotSettingsPanel() {
                   ]}
                 />
 
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <label className="space-y-1.5">
+                    <span className="text-[11px] font-medium text-dl-text-secondary">可检索时间范围</span>
+                    <Select
+                      value={String(settings.contextWindowSeconds || 86_400)}
+                      onValueChange={(val) =>
+                        void patchSettings(
+                          { contextWindowSeconds: Number.parseInt(val, 10) || 86_400 },
+                          "历史检索时间范围已更新"
+                        )
+                      }
+                      options={[
+                        { value: "86400", label: "最近 24 小时" },
+                        { value: "604800", label: "最近 7 天" },
+                        { value: "2592000", label: "最近 30 天" },
+                      ]}
+                    />
+                  </label>
+                  <div className="rounded-lg bg-dl-surface-subtle/60 px-3 py-2 text-[11px] leading-5 text-dl-text-tertiary">
+                    这是服务端允许检索的范围，不是每次都注入模型的消息数。Agent 可以在此范围内按需分页、搜索和展开。
+                  </div>
+                </div>
+
                 <div className="flex items-center justify-between gap-3 pt-1">
                   <div>
                     <div className="text-xs font-medium text-dl-text-primary">
@@ -2272,6 +2640,30 @@ export function BotSettingsPanel() {
                       )
                     }
                   />
+                </div>
+
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <div className="text-xs font-medium text-dl-text-primary">允许读取附件预览</div>
+                    <div className="text-[11px] text-dl-text-tertiary">
+                      只返回受限预览，仍需 files:read_preview Scope；完整文件还需单独的 files:read_content Scope
+                    </div>
+                  </div>
+                  <Switch
+                    label="允许读取附件预览"
+                    checked={settings.allowAttachmentPreview}
+                    onCheckedChange={(checked) =>
+                      void patchSettings(
+                        { allowAttachmentPreview: checked },
+                        checked ? "已允许附件预览读取" : "已关闭附件预览读取"
+                      )
+                    }
+                  />
+                </div>
+
+                <div className="rounded-lg border border-dl-border-hairline px-3 py-2 text-[11px] leading-5 text-dl-text-tertiary">
+                  助手默认围绕触发消息接收少量近期上下文。Agent 可使用获准的历史工具按需拉取，
+                  返回会标注分页、截断和覆盖范围；拿到读取权限不代表会把全部历史送入模型。
                 </div>
               </div>
             </div>
@@ -2350,6 +2742,21 @@ export function BotSettingsPanel() {
                                   minute: "2-digit",
                                 })}`
                               : ""}
+                          </div>
+                          <div className="flex flex-wrap gap-1 pt-0.5">
+                            {(tok.scopes || []).map((scope) => (
+                              <span
+                                key={scope}
+                                className={cn(
+                                  "rounded-full px-1.5 py-0.5 text-[10px]",
+                                  scope === "files:read_content"
+                                    ? "bg-dl-warning/15 text-dl-warning"
+                                    : "bg-dl-surface-subtle text-dl-text-tertiary"
+                                )}
+                              >
+                                {SCOPE_LABEL_MAP[scope] || scope}
+                              </span>
+                            ))}
                           </div>
                         </div>
                         <Button

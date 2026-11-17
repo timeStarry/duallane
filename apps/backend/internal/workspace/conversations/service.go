@@ -353,6 +353,16 @@ func canStartDirect(member MemberRecord) bool {
 	return member.Kind != "system" && member.Role != "auditor" && member.ID != ""
 }
 
+func canStartDirectForActor(member MemberRecord, actor *auth.Actor) bool {
+	if actor == nil || actor.ID == "" || actor.ID == member.ID {
+		return false
+	}
+	if member.BotAccess != nil {
+		return member.BotAccess.DirectAllows(actor.ID, true, member.NormallyVisible)
+	}
+	return canStartDirect(member)
+}
+
 func canJoinGroup(member MemberRecord) bool {
 	return member.Kind == "human" && member.Role != "auditor" && member.ID != ""
 }
@@ -419,11 +429,11 @@ func projectMember(record MemberRecord, actor *auth.Actor) Member {
 				member.RecallReason = "内容有误"
 			}
 		}
-		member.Capabilities.CanStartDirectConversation = actor != nil && actor.ID != record.ID && canStartDirect(record) && hasCapability(actor.Role, conversationDirectCapability)
+		member.Capabilities.CanStartDirectConversation = canStartDirectForActor(record, actor) && hasCapability(actor.Role, conversationDirectCapability)
 	} else {
 		member.AvatarURL = sanitizeAvatarURL(record.AvatarURL)
 		member.Description = record.Description
-		member.Capabilities.CanStartDirectConversation = actor != nil && actor.ID != record.ID && canStartDirect(record) && hasCapability(actor.Role, conversationDirectCapability)
+		member.Capabilities.CanStartDirectConversation = canStartDirectForActor(record, actor) && hasCapability(actor.Role, conversationDirectCapability)
 	}
 	return member
 }
@@ -859,18 +869,28 @@ func (s *Service) createDirect(ctx context.Context, tx Tx, actor *auth.Actor, in
 		err := NewError(CodeConversationInvalidTarget, MessageConversationInvalidTarget, 400)
 		return nil, rejectedError(err, "conversation.create", conversationTargetType, "new", "invalid target"), nil
 	}
-	if !canStartDirect(*target) {
+	if target.BotAccess != nil {
+		// Agent Bot DMs are governed by the explicit V2 direct policy. A
+		// shared group or the legacy directory projection must not grant a DM.
+		if !target.BotAccess.DirectAllows(actor.ID, true, target.NormallyVisible) {
+			err := NewError(CodeConversationInvalidTarget, MessageConversationInvalidTarget, 400)
+			return nil, rejectedError(err, "conversation.create", conversationTargetType, "new", "target direct access denied"), nil
+		}
+	} else if !canStartDirect(*target) {
 		err := NewError(CodeConversationInvalidTarget, MessageConversationInvalidTarget, 400)
 		return nil, rejectedError(err, "conversation.create", conversationTargetType, "new", "invalid target"), nil
 	}
-	visible, err := tx.MemberVisible(ctx, s.space(), actor.ID, targetID)
-	if err != nil {
-		return nil, nil, err
-	}
-	if !visible {
-		visible, err = tx.SharesActiveGroup(ctx, s.space(), actor.ID, targetID)
+	visible := target.BotAccess != nil
+	if target.BotAccess == nil {
+		visible, err = tx.MemberVisible(ctx, s.space(), actor.ID, targetID)
 		if err != nil {
 			return nil, nil, err
+		}
+		if !visible {
+			visible, err = tx.SharesActiveGroup(ctx, s.space(), actor.ID, targetID)
+			if err != nil {
+				return nil, nil, err
+			}
 		}
 	}
 	if !visible && !target.SearchDiscoverable {

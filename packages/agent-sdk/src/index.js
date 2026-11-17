@@ -2,8 +2,12 @@ import crypto from "node:crypto";
 import { LiteWebSocket, OPEN } from "./ws-lite.js";
 import { requestGateway, readGatewayBytes } from "./transport.js";
 import { normalizeFileBytes } from "./file-input.js";
+import { buildMessageContent } from "./message-content.js";
+import { createTaskScopedClient } from "./task-client.js";
+export { buildMessageContent, parseMessageContent, messageText, messageMention, messageAttachment, messageLink, AGENT_MESSAGE_FORMAT } from "./message-content.js";
+export { createTaskToolServer, createTaskToolBroker, createTaskBrokerMcpAdapter, DUALLANE_TASK_TOOLS } from "./task-tools.js";
 
-export const DUALLANE_AGENT_SDK_VERSION = "1.1.2";
+export const DUALLANE_AGENT_SDK_VERSION = "1.2.0";
 export const DUALLANE_GATEWAY_VERSION = 1;
 
 export function compareRuntimeSemver(a, b) {
@@ -107,6 +111,7 @@ export class DualLaneAgentClient {
   #ackTimeoutMs;
   #connectTimeoutMs;
   #requestTimeoutMs;
+  #taskId;
   #reconnect;
   #socket = null;
   #stopped = true;
@@ -131,6 +136,7 @@ export class DualLaneAgentClient {
     this.#ackTimeoutMs = normalizeDuration(options.ackTimeoutMs, 8_000, 1_000, 60_000, "ackTimeoutMs");
     this.#connectTimeoutMs = normalizeDuration(options.connectTimeoutMs, 10_000, 1_000, 60_000, "connectTimeoutMs");
     this.#requestTimeoutMs = normalizeDuration(options.requestTimeoutMs, 35_000, 1, 120_000, "requestTimeoutMs");
+    this.#taskId = options.taskId === undefined ? null : normalizeId(options.taskId, "taskId");
     this.#reconnect = Object.freeze({
       minDelayMs: normalizeDuration(options.reconnect?.minDelayMs, 500, 100, 60_000, "reconnect.minDelayMs"),
       maxDelayMs: normalizeDuration(options.reconnect?.maxDelayMs, 30_000, 500, 120_000, "reconnect.maxDelayMs"),
@@ -189,10 +195,66 @@ export class DualLaneAgentClient {
     return this.#request("GET", "/api/bot-gateway/v1/me");
   }
 
+  async getCapabilities(conversationId, options = {}) {
+    const query = conversationId ? `?conversationId=${encodeURIComponent(normalizeId(conversationId, "conversationId"))}` : "";
+    return this.#request("GET", `/api/bot/v2/capabilities${query}`, undefined, options);
+  }
+
+  async createTask(input = {}, options = {}) {
+    return this.#request("POST", "/api/bot/v2/tasks", { eventId: normalizeId(input.eventId, "eventId") }, options);
+  }
+
+  async getTask(taskId, options = {}) {
+    return this.#request("GET", `/api/bot/v2/tasks/${encodeURIComponent(normalizeId(taskId, "taskId"))}`, undefined, options);
+  }
+
+  async cancelAgentTask(taskId, options = {}) {
+    return this.#request("DELETE", `/api/bot/v2/tasks/${encodeURIComponent(normalizeId(taskId, "taskId"))}`, undefined, options);
+  }
+
+  async getOperation(taskId, operation, key, options = {}) {
+    const values = [taskId, operation, key].map((value) => encodeURIComponent(normalizeId(value, "operation reference")));
+    return this.#request("GET", `/api/bot/v2/tasks/${values[0]}/operations/${values[1]}/${values[2]}`, undefined, options);
+  }
+
+  forTask(task, options = {}) {
+    const credentialed = new DualLaneAgentClient({ url: this.#origin, token: this.#token, fetch: this.#fetch,
+      webSocketFactory: this.#webSocketFactory, adapterVersion: this.#adapterVersion,
+      requestTimeoutMs: this.#requestTimeoutMs, taskId: task.id });
+    return createTaskScopedClient(credentialed, task, options);
+  }
+
+  async getMessage(messageId, options = {}) {
+    const query = options.conversationId ? `?conversationId=${encodeURIComponent(normalizeId(options.conversationId, "conversationId"))}` : "";
+    return this.#request("GET", `/api/bot/v2/messages/${encodeURIComponent(normalizeId(messageId, "messageId"))}${query}`, undefined, options);
+  }
+
+  async listHistory(conversationId, options = {}) {
+    const query = new URLSearchParams();
+    for (const name of ["before", "query", "authorId", "startTime", "endTime"]) {
+      if (options[name] !== undefined) {
+        const value = options[name] instanceof Date && ["startTime", "endTime"].includes(name) ? options[name].toISOString() : String(options[name]);
+        if (!value || value.length > 4096) throw new TypeError(`${name} is invalid`);
+        query.set(name, value);
+      }
+    }
+    if (options.limit !== undefined) query.set("limit", String(normalizeLimit(options.limit)));
+    return this.#request("GET", `/api/bot/v2/conversations/${encodeURIComponent(normalizeId(conversationId, "conversationId"))}/messages?${query}`, undefined, options);
+  }
+
+  async searchMessages(conversationId, options = {}) {
+    if (typeof options.query !== "string" || !options.query.trim()) throw new TypeError("query is required");
+    return this.listHistory(conversationId, options);
+  }
+
+  async listMembers(conversationId, options = {}) {
+    return this.#request("GET", `/api/bot/v2/conversations/${encodeURIComponent(normalizeId(conversationId, "conversationId"))}/members`, undefined, options);
+  }
+
   async getContext(conversationId, options = {}) {
     const id = normalizeId(conversationId, "conversationId");
     const query = options.limit === undefined ? "" : `?limit=${normalizeLimit(options.limit)}`;
-    return this.#request("GET", `/api/bot-gateway/v1/conversations/${encodeURIComponent(id)}/context${query}`);
+    return this.#request("GET", `/api/bot-gateway/v1/conversations/${encodeURIComponent(id)}/context${query}`, undefined, options);
   }
 
   async acknowledge(input) {
@@ -211,21 +273,21 @@ export class DualLaneAgentClient {
     const clientMessageId = normalizeId(input.clientMessageId ?? createClientId("msg"), "clientMessageId");
     const idempotencyKey = normalizeId(input.idempotencyKey ?? clientMessageId, "idempotencyKey");
     if (input.text === undefined && input.content === undefined) throw new TypeError("text or content is required");
-    return this.#request("POST", "/api/bot-gateway/v1/messages", compact({
+    return this.#taskOperation("message.send", idempotencyKey, () => this.#request("POST", "/api/bot-gateway/v1/messages", compact({
       conversationId,
       clientMessageId,
       idempotencyKey,
       text: input.text,
-      content: input.content,
+      content: input.content === undefined ? undefined : buildMessageContent(input.content),
       replyToMessageId: input.replyToMessageId
-    }));
+    }), { signal: input.signal }));
   }
 
   async sendCard(input = {}) {
     const conversationId = normalizeId(input.conversationId, "conversationId");
     const clientMessageId = normalizeId(input.clientMessageId ?? createClientId("cardmsg"), "clientMessageId");
     const idempotencyKey = normalizeId(input.idempotencyKey ?? clientMessageId, "idempotencyKey");
-    return this.#request("POST", "/api/bot-gateway/v1/cards", compact({
+    return this.#taskOperation("card.send", idempotencyKey, () => this.#request("POST", "/api/bot-gateway/v1/cards", compact({
       conversationId,
       clientMessageId,
       idempotencyKey,
@@ -236,7 +298,7 @@ export class DualLaneAgentClient {
       format: input.format,
       feishuCard: input.feishuCard,
       card: input.card
-    }));
+    }), { signal: input.signal }));
   }
 
   async sendFeishuCard(input = {}) {
@@ -245,13 +307,17 @@ export class DualLaneAgentClient {
   }
 
   async updateCard(cardId, input = {}) {
-    return this.#request("PATCH", `/api/bot-gateway/v1/cards/${encodeURIComponent(normalizeId(cardId, "cardId"))}`, compact(input));
+    const { signal, ...body } = input;
+    const id = normalizeId(cardId, "cardId");
+    const key = "card_" + crypto.createHash("sha256").update(`${id}:${body.expectedRevision}`).digest("hex");
+    return this.#taskOperation("card.update", key, () => this.#request("PATCH", `/api/bot-gateway/v1/cards/${encodeURIComponent(id)}`, compact(body), { signal }));
   }
 
   async updateFeishuCard(cardId, input = {}) {
     if (!input.card || typeof input.card !== "object" || Array.isArray(input.card)) throw new TypeError("card is required");
     return this.updateCard(cardId, compact({
       expectedRevision: input.expectedRevision,
+      signal: input.signal,
       fallbackText: input.fallbackText,
       format: "feishu-card",
       feishuCard: input.card
@@ -358,11 +424,21 @@ export class DualLaneAgentClient {
     return this.#request("GET", "/api/bot/v2/doctor");
   }
 
-  async editMessage(messageId, plainText) {
+  async editMessage(messageId, input, options = {}) {
     const id = normalizeId(messageId, "messageId");
-    const text = typeof plainText === "string" ? plainText.trim() : "";
-    if (!text) throw new TypeError("plainText is required");
-    return this.#request("PATCH", `/api/bot/v2/messages/${encodeURIComponent(id)}`, { plainText: text });
+    const update = typeof input === "string" ? { plainText: input.trim(), expectedVersion: options.expectedVersion } : input;
+    if (!update || typeof update !== "object" || Array.isArray(update)) throw new TypeError("message update is required");
+    const body = compact({ plainText: update.plainText, content: update.content === undefined ? undefined : buildMessageContent(update.content), expectedVersion: update.expectedVersion });
+    if ((body.plainText === undefined || body.plainText === "") && body.content === undefined) throw new TypeError("plainText or content is required");
+    if (body.plainText !== undefined && (typeof body.plainText !== "string" || body.plainText.length > 30_000)) throw new TypeError("plainText is invalid");
+    if (this.#taskId) {
+      if (body.expectedVersion === undefined) body.expectedVersion = (await this.getMessage(id, { signal: options.signal }))?.message?.version;
+      if (!/^[a-f0-9]{64}$/u.test(body.expectedVersion || "")) throw new DualLaneAgentError("message.version_required", "A current message version is required");
+    } else if (body.content !== undefined || body.expectedVersion !== undefined) {
+      throw new DualLaneAgentError("task.context_required", "Conditional or structured edits require a task client");
+    }
+    const key = "edit_" + crypto.createHash("sha256").update(`${id}:${body.expectedVersion}`).digest("hex");
+    return this.#taskOperation("message.edit", key, () => this.#request("PATCH", `/api/bot/v2/messages/${encodeURIComponent(id)}`, body, options));
   }
 
   async sendFile(input = {}) {
@@ -389,7 +465,8 @@ export class DualLaneAgentClient {
       "POST",
       `/api/bot/v2/conversations/${encodeURIComponent(conversationId)}/files?${params.toString()}`,
       rawBytes,
-      mimeType
+      mimeType,
+      { signal: input.signal }
     );
   }
 
@@ -407,11 +484,11 @@ export class DualLaneAgentClient {
       mimeType: String(input.mimeType || inferMimeTypeFromFileName(fileName)),
       byteSize,
       visibility: "conversation",
-    });
+    }, { signal: input.signal });
   }
 
-  async getUploadStatus(uploadId) {
-    return this.#request("GET", `/api/bot/v2/uploads/${encodeURIComponent(normalizeId(uploadId, "uploadId"))}`);
+  async getUploadStatus(uploadId, options = {}) {
+    return this.#request("GET", `/api/bot/v2/uploads/${encodeURIComponent(normalizeId(uploadId, "uploadId"))}`, undefined, options);
   }
 
   async readAttachment(input = {}) {
@@ -434,14 +511,15 @@ export class DualLaneAgentClient {
     });
   }
 
-  async completeUploadContent(uploadId, rawBytes, mimeType = "application/octet-stream") {
+  async completeUploadContent(uploadId, rawBytes, mimeType = "application/octet-stream", options = {}) {
     const id = normalizeId(uploadId, "uploadId");
     rawBytes = normalizeFileBytes(rawBytes, { allowText: false });
     return this.#requestBinary(
       "PUT",
       `/api/bot/v2/uploads/${encodeURIComponent(id)}/content`,
       rawBytes,
-      mimeType
+      mimeType,
+      options
     );
   }
 
@@ -496,6 +574,13 @@ export class DualLaneAgentClient {
     return { timeout: true, lastSequence: Math.max(initialCursor, this.#lastSequence), transport: "poll" };
   }
 
+  async #taskOperation(operation, key, execute) {
+    if (!this.#taskId) return execute();
+    const reference = { taskId: this.#taskId, operation, key };
+    try { return { ...await execute(), operation: reference }; }
+    catch (error) { error.operation = reference; throw error; }
+  }
+
   async #request(method, path, body, options = {}) {
     return this.#gatewayRequest(method, path, {
       body: body === undefined ? undefined : JSON.stringify(body),
@@ -504,8 +589,8 @@ export class DualLaneAgentClient {
     });
   }
 
-  async #requestBinary(method, path, rawBytes, contentType = "application/octet-stream") {
-    return this.#gatewayRequest(method, path, { body: rawBytes, contentType, byteSize: rawBytes.byteLength });
+  async #requestBinary(method, path, rawBytes, contentType = "application/octet-stream", options = {}) {
+    return this.#gatewayRequest(method, path, { body: rawBytes, contentType, byteSize: rawBytes.byteLength, ...options });
   }
 
   async #gatewayRequest(method, route, options = {}) {
@@ -524,6 +609,7 @@ export class DualLaneAgentClient {
             "content-type": options.contentType,
             "content-length": options.byteSize === undefined ? undefined : String(options.byteSize),
             "x-duallane-adapter-version": this.#adapterVersion,
+            "x-duallane-task": this.#taskId || undefined,
           }),
           body: options.body,
         },

@@ -24,7 +24,10 @@ var (
 )
 
 type V1BootstrapMember struct {
-	ID          string `json:"id"`
+	ID string `json:"id"`
+	// BotID is emitted only for a visible custom Agent Bot. ID remains the
+	// public user identity, including for bots.
+	BotID       string `json:"botId,omitempty"`
 	DisplayName string `json:"displayName"`
 	Nickname    string `json:"nickname,omitempty"`
 	Remark      string `json:"remark,omitempty"`
@@ -294,7 +297,7 @@ type BotAvatarPayload struct {
 	Data     []byte
 }
 
-const LatestAgentSDKVersion = "1.1.2"
+const LatestAgentSDKVersion = "1.2.0"
 
 type BotWebhookConfig struct {
 	BotID      string `json:"botId"`
