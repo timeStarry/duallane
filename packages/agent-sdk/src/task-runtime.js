@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { AgentRuntimeError, buildAgentBridgeRequest, parseAgentBridgeResult, safeAgentError } from "./bridge-protocol.js";
+import { createTaskToolBroker } from "./task-tools.js";
 
 const TASK_TERMINAL = new Set(["completed", "failed", "cancelled"]);
 const TASK_FILE_LIMIT = 16 * 1024 * 1024;
@@ -168,7 +169,8 @@ export function readAgentTaskSummary(options) {
   if (!fs.existsSync(file)) return { total: 0, active: 0, failed: 0, completed: 0, tasks: [] };
   const state = JSON.parse(taskReadFile(file).toString("utf8"));
   const tasks = (state.tasks || []).map((task) => ({ taskId: task.taskId, state: task.state, attempts: task.attempts,
-    error: task.error || null, updatedAt: task.updatedAt, expiresAt: task.expiresAt }));
+    error: task.error || null, updatedAt: task.updatedAt, expiresAt: task.expiresAt,
+    serverCancellationPending: task.remoteCancellationPending === true }));
   return { total: tasks.length, active: tasks.filter((t) => !TASK_TERMINAL.has(t.state)).length,
     failed: tasks.filter((t) => t.state === "failed").length, completed: tasks.filter((t) => t.state === "completed").length, tasks };
 }
@@ -188,7 +190,7 @@ export function createAgentTaskRuntime(options) {
   const { client, invoke, prepareInputs = async () => [], resolveMedia, validateBytes,
     onState = () => {}, now = Date.now, scopes = [] } = options;
   if (!client || typeof invoke !== "function") throw new AgentRuntimeError("runtime.invalid_adapter");
-  for (const field of ["maxTasks", "maxBytes", "retentionMs", "maxConcurrency", "maxAttempts", "retryDelayMs"]) {
+  for (const field of ["maxTasks", "maxBytes", "retentionMs", "maxConcurrency", "maxAttempts", "retryDelayMs", "authorizationPollMs"]) {
     if (options[field] !== undefined && (!Number.isSafeInteger(options[field]) || options[field] < (field === "retryDelayMs" ? 0 : 1))) throw new AgentRuntimeError("runtime.invalid_limit");
   }
   const maxTasks = Math.min(1000, Math.max(1, options.maxTasks ?? 200));
@@ -203,6 +205,8 @@ export function createAgentTaskRuntime(options) {
   const stateFile = path.join(directory, "tasks.json");
   let tasks = [], closed = false, started = false, timer, scheduling = false;
   const running = new Map(), activeConversations = new Set(), waiters = [], notifying = new Map();
+  const scopedClients = new Map();
+  const remoteControls = new Set();
   const notify = () => { try { onState(summary()); } catch { /* Observability cannot alter task state. */ } };
   const persist = () => {
     const bytes = Buffer.from(JSON.stringify({ version: 1, tasks }));
@@ -259,9 +263,62 @@ export function createAgentTaskRuntime(options) {
     const result = await client.listConversations();
     const conversation = result?.conversations?.find((item) => item.id === task.event.conversationId);
     if (!conversation || conversation.allowTrigger === false || conversation.allowSend === false) throw new AgentRuntimeError("task.authorization_denied");
+    let activeClient = client, capabilities;
+    if (typeof client.getCapabilities === "function") {
+      try { capabilities = await client.getCapabilities(conversation.id); }
+      catch (error) {
+        if (error?.statusCode !== 404 && error?.statusCode !== 405) throw error;
+        if (conversation.taskRequired === true || task.remoteTask) throw new AgentRuntimeError("task.protocol_required");
+      }
+      if (capabilities?.features?.taskAuthorization === true && task.event.type === "message.created") {
+        if (!task.remoteTask) {
+          const accepted = await client.createTask({ eventId: task.event.eventId });
+          const triggerId = task.event.payload?.messageId || task.event.payload?.message?.id || task.event.messageId;
+          if (!accepted?.task?.id || accepted.task.conversationId !== conversation.id || (triggerId && accepted.task.triggerMessageId !== triggerId)) throw new AgentRuntimeError("task.invalid_context");
+          task.remoteTask = accepted.task; persist();
+        }
+        const checked = await client.getTask(task.remoteTask.id);
+        if (!checked?.task || checked.task.id !== task.remoteTask.id || checked.task.conversationId !== conversation.id || checked.task.triggerMessageId !== task.remoteTask.triggerMessageId) throw new AgentRuntimeError("task.authorization_denied");
+        activeClient = scopedClients.get(task.taskId);
+        if (!activeClient) {
+          activeClient = client.forTask(checked.task);
+          scopedClients.set(task.taskId, activeClient);
+        }
+      } else if (capabilities?.taskRequired === true || conversation.taskRequired === true || task.remoteTask) {
+        throw new AgentRuntimeError("task.protocol_required");
+      }
+    } else if (conversation.taskRequired === true) throw new AgentRuntimeError("task.protocol_required");
     let context = null;
-    if (scopes.includes("messages:read_context") && conversation.allowContext !== false) context = await client.getContext(conversation.id, { limit: 50 });
-    return { conversation, context };
+    if (scopes.includes("messages:read_context") && conversation.allowContext !== false) context = await activeClient.getContext(conversation.id, { limit: 12 });
+    if (task.remoteTask && (!context?.messages?.some((message) => message.id === task.remoteTask.triggerMessageId))) {
+      const exact = await activeClient.getMessage(task.remoteTask.triggerMessageId);
+      if (!exact?.message?.id) throw new AgentRuntimeError("input.trigger_unavailable");
+      context = { ...(context || {}), messages: [...(context?.messages || []).slice(-11), exact.message] };
+    }
+    return { conversation, context, client: activeClient, capabilities };
+  }
+
+  function activeTaskClient(task) { return scopedClients.get(task.taskId) || client; }
+
+  function watchRemoteTask(task, controller) {
+    if (!task.remoteTask) return () => {};
+    let stopped = false, pending = false;
+    const check = async () => {
+      if (stopped || pending || controller.signal.aborted) return;
+      pending = true;
+      try {
+        const result = await client.getTask(task.remoteTask.id, { signal: controller.signal });
+        if (!result?.task || result.task.id !== task.remoteTask.id || result.task.conversationId !== task.event.conversationId
+          || result.task.triggerMessageId !== task.remoteTask.triggerMessageId
+          || ["cancelled", "expired", "revoked"].includes(result.task.status)
+          || Date.parse(result.task.expiresAt) <= now()) throw new AgentRuntimeError("task.authorization_denied");
+      }
+      catch (error) { if (!stopped) controller.abort(error?.code === "sdk.upgrade_required" ? error : new AgentRuntimeError(error?.code || "task.authorization_denied")); }
+      finally { pending = false; }
+    };
+    const timer = setInterval(check, Math.min(30_000, Math.max(100, options.authorizationPollMs ?? 5000)));
+    timer.unref?.();
+    return () => { stopped = true; clearInterval(timer); };
   }
 
   function visibleArtifacts(conversationId, context) {
@@ -275,14 +332,14 @@ export function createAgentTaskRuntime(options) {
           expiresAt: task.expiresAt })));
   }
 
-  async function readArtifact(id, conversationId, context, signal, maxBytes = 10 * 1024 * 1024) {
+  async function readArtifact(id, conversationId, context, signal, maxBytes = 10 * 1024 * 1024, taskClient = client) {
     if (!scopes.includes("files:read_content") || !scopes.includes("messages:read_context") || typeof client.readAttachment !== "function") throw new AgentRuntimeError("artifact.read_scope_required");
     const visible = visibleArtifacts(conversationId, context).find((artifact) => artifact.artifactId === id);
     if (!visible) throw new AgentRuntimeError("artifact.reference_denied");
     const owner = tasks.find((task) => (task.artifacts || []).some((artifact) => artifact.artifactId === id));
     const record = owner.artifacts.find((artifact) => artifact.artifactId === id);
     if (record.byteSize > maxBytes) throw new AgentRuntimeError("input.attachment_limit");
-    const result = await client.readAttachment({ conversationId, messageId: record.messageId, attachmentId: record.attachmentId,
+    const result = await taskClient.readAttachment({ conversationId, messageId: record.messageId, attachmentId: record.attachmentId,
       mode: "content", signal, maxBytes });
     taskCheckCancelled(signal);
     if (owner.expiresAt <= now()) throw new AgentRuntimeError("artifact.expired");
@@ -295,20 +352,20 @@ export function createAgentTaskRuntime(options) {
 
   async function generate(task, authorization, signal) {
     taskCheckCancelled(signal);
-    const { conversation, context } = authorization;
-    const request = buildAgentBridgeRequest({ taskId: task.taskId, event: task.event, conversation, context,
+    const { conversation, context, client: taskClient } = authorization;
+    const request = buildAgentBridgeRequest({ taskId: task.taskId, event: task.event, conversation, context, authorization: task.remoteTask,
       capabilities: { publicMedia: Boolean(resolveMedia), incomingAttachments: scopes.some((scope) => ["files:read_content", "files:read_preview"].includes(scope)) },
       artifacts: visibleArtifacts(conversation.id, context) });
     task.triggerMessageId = request.triggerMessage?.id || null;
     persist();
-    request.inputs = await prepareInputs({ client, event: task.event, triggerMessage: request.triggerMessage, context, conversation, scopes, signal });
+    request.inputs = await prepareInputs({ client: taskClient, event: task.event, triggerMessage: request.triggerMessage, context, conversation, scopes, signal });
     taskCheckCancelled(signal);
     let remainingInputBytes = 10 * 1024 * 1024 - request.inputs.reduce((total, input) => total + (input.byteSize || 0), 0);
     const alreadyIncluded = new Set(request.inputs.map((input) => input.attachmentId));
     for (const reference of [...request.artifacts].reverse().filter((artifact) => !alreadyIncluded.has(artifact.attachmentId)).slice(0, 2)) {
       if (alreadyIncluded.has(reference.attachmentId) || request.inputs.length >= 6 || reference.byteSize > remainingInputBytes) continue;
       try {
-        const artifact = await readArtifact(reference.artifactId, conversation.id, context, signal, remainingInputBytes);
+        const artifact = await readArtifact(reference.artifactId, conversation.id, context, signal, remainingInputBytes, taskClient);
         remainingInputBytes -= artifact.bytes.length;
         alreadyIncluded.add(reference.attachmentId);
         request.inputs.push({ artifactId: reference.artifactId, attachmentId: reference.attachmentId, messageId: reference.messageId,
@@ -317,10 +374,23 @@ export function createAgentTaskRuntime(options) {
           encoding: "base64", data: artifact.bytes.toString("base64") });
       } catch (error) {
         taskCheckCancelled(signal);
+        if (error?.code === "sdk.upgrade_required") throw error;
         request.inputs.push({ artifactId: reference.artifactId, status: "unavailable", code: safeAgentError(error).code });
       }
     }
-    const result = parseAgentBridgeResult(await invoke(request, { signal }), { taskId: task.taskId, validateBytes });
+    let broker;
+    let result;
+    try {
+      if (task.remoteTask) {
+        const currentCapabilities = await taskClient.getCapabilities();
+        request.capabilities.channel = { features: currentCapabilities.features, operations: currentCapabilities.operations,
+          limits: currentCapabilities.limits, taskRequired: currentCapabilities.taskRequired };
+        broker = await createTaskToolBroker(taskClient, { signal, capabilities: currentCapabilities });
+        request.toolSession = broker.descriptor;
+        request.capabilities.taskTools = true;
+      }
+      result = parseAgentBridgeResult(await invoke(request, { signal, toolEnvironment: broker?.environment }), { taskId: task.taskId, validateBytes });
+    } finally { broker?.close(); }
     taskCheckCancelled(signal);
     const artifacts = [];
     let total = 0;
@@ -331,7 +401,7 @@ export function createAgentTaskRuntime(options) {
         artifact = await resolveMedia(descriptor.url, { signal });
         taskCheckCancelled(signal);
         if (descriptor.fileName) artifact.fileName = descriptor.fileName;
-      } else if (descriptor.source === "artifact") artifact = await readArtifact(descriptor.artifactId, conversation.id, context, signal);
+      } else if (descriptor.source === "artifact") artifact = await readArtifact(descriptor.artifactId, conversation.id, context, signal, 10 * 1024 * 1024, taskClient);
       validateBytes?.(artifact.bytes, artifact.mimeType, { source: descriptor.source === "https" ? "https" : "inline" });
       total += artifact.bytes.length;
       if (total > 50 * 1024 * 1024 || usedBytes() + artifact.bytes.length > maxBytes) throw new AgentRuntimeError("artifact.storage_limit");
@@ -352,11 +422,12 @@ export function createAgentTaskRuntime(options) {
       }
       throw error;
     }
-    task.text = result.text; task.artifacts = artifacts; task.generated = true;
+    task.text = result.text; task.content = result.content; task.artifacts = artifacts; task.generated = true;
     setState(task, "generated");
   }
 
   async function publish(task, signal) {
+    const taskClient = activeTaskClient(task);
     for (let index = 0; index < task.artifacts.length; index += 1) {
       const artifact = task.artifacts[index];
       if (artifact.messageId) continue;
@@ -364,7 +435,7 @@ export function createAgentTaskRuntime(options) {
       const authorization = await authorize(task);
       taskCheckCancelled(signal);
       if (artifact.source?.kind === "artifact") {
-        const current = await readArtifact(artifact.source.artifactId, task.event.conversationId, authorization.context, signal);
+        const current = await readArtifact(artifact.source.artifactId, task.event.conversationId, authorization.context, signal, 10 * 1024 * 1024, taskClient);
         if (taskDigest(current.bytes) !== artifact.sha256) throw new AgentRuntimeError("artifact.integrity_failed");
       }
       if (!artifact.attachmentId) {
@@ -372,12 +443,12 @@ export function createAgentTaskRuntime(options) {
         const bytes = taskReadFile(blobPath(artifact.artifactId), 25 * 1024 * 1024);
         if (taskDigest(bytes) !== artifact.sha256) throw new AgentRuntimeError("artifact.integrity_failed");
         setState(task, "uploading");
-        if (typeof client.reserveUpload === "function" && typeof client.getUploadStatus === "function") {
+        if (typeof taskClient.reserveUpload === "function" && typeof taskClient.getUploadStatus === "function") {
           if (!artifact.uploadId) {
             artifact.state = "reserving"; persist();
             let reservationRejected = false;
             try {
-              const reserved = await client.reserveUpload({ conversationId: task.event.conversationId,
+              const reserved = await taskClient.reserveUpload({ conversationId: task.event.conversationId,
                 fileName: artifact.fileName, mimeType: artifact.mimeType, byteSize: artifact.byteSize });
               // Quota rejection is a successful gateway response with no upload ID.
               if (reserved?.upload?.status === "rejected") {
@@ -399,7 +470,7 @@ export function createAgentTaskRuntime(options) {
             taskCheckCancelled(signal);
             artifact.state = "completing"; persist();
             try {
-              const complete = await client.completeUploadContent(artifact.uploadId, bytes, artifact.mimeType);
+              const complete = await taskClient.completeUploadContent(artifact.uploadId, bytes, artifact.mimeType);
               const receipt = complete?.attachment || complete?.upload?.attachment;
               if (receipt?.id) { artifact.attachmentId = receipt.id; artifact.state = "uploaded"; persist(); }
               else { artifact.state = "checking"; persist(); }
@@ -416,7 +487,7 @@ export function createAgentTaskRuntime(options) {
           }
           taskCheckCancelled(signal);
           if (!artifact.attachmentId) {
-            const status = await client.getUploadStatus(artifact.uploadId);
+            const status = await taskClient.getUploadStatus(artifact.uploadId);
             if (status?.upload?.status === "completed" && status.upload.attachment?.id) {
               artifact.attachmentId = status.upload.attachment.id; artifact.state = "uploaded"; persist();
             } else if (status?.upload?.status === "failed") throw new AgentRuntimeError("upload.failed");
@@ -426,7 +497,7 @@ export function createAgentTaskRuntime(options) {
           // Older custom clients cannot reconcile a lost one-step upload receipt.
           artifact.state = "uploading"; persist();
           try {
-            const uploaded = await client.uploadFile({ conversationId: task.event.conversationId, bytes,
+            const uploaded = await taskClient.uploadFile({ conversationId: task.event.conversationId, bytes,
               fileName: artifact.fileName, mimeType: artifact.mimeType,
               clientMessageId: `artifact-${artifact.artifactId}`, idempotencyKey: `artifact-${artifact.artifactId}` });
             if (typeof uploaded?.attachment?.id !== "string" || !uploaded.attachment.id) throw new AgentRuntimeError("upload.outcome_unknown");
@@ -443,9 +514,9 @@ export function createAgentTaskRuntime(options) {
       if (signal.aborted) throw new AgentRuntimeError("task.cancelled");
       setState(task, "sending");
       const text = index === 0 ? task.text : "";
-      const sent = await client.sendMessage({ conversationId: task.event.conversationId,
+      const sent = await taskClient.sendMessage({ conversationId: task.event.conversationId,
         content: { format: "duallane.message+json;v=1", plainText: text,
-          blocks: [...(text ? [{ type: "text", text }] : []), { type: "attachment", attachmentId: artifact.attachmentId }] },
+          blocks: [...(index === 0 && task.content ? task.content.blocks : (text ? [{ type: "text", text }] : [])), { type: "attachment", attachmentId: artifact.attachmentId }] },
         replyToMessageId: task.triggerMessageId || undefined,
         clientMessageId: `publish-${artifact.artifactId}`, idempotencyKey: `publish-${artifact.artifactId}` });
       if (!sent?.message?.id) throw new AgentRuntimeError("send.invalid_receipt", { retryable: true });
@@ -454,7 +525,8 @@ export function createAgentTaskRuntime(options) {
     }
     if (!task.artifacts.length && !task.messageId) {
       await authorize(task); taskCheckCancelled(signal); setState(task, "sending");
-      const sent = await client.sendMessage({ conversationId: task.event.conversationId, text: task.text,
+      const sent = await taskClient.sendMessage({ conversationId: task.event.conversationId, text: task.text,
+        content: task.content,
         replyToMessageId: task.triggerMessageId || undefined,
         clientMessageId: `reply-${task.taskId}`, idempotencyKey: `reply-${task.taskId}` });
       if (!sent?.message?.id) throw new AgentRuntimeError("send.invalid_receipt", { retryable: true });
@@ -473,41 +545,57 @@ export function createAgentTaskRuntime(options) {
     try {
       await authorize(task);
       const error = task.error;
-      const result = await client.sendMessage({ conversationId: task.event.conversationId,
+      const result = await activeTaskClient(task).sendMessage({ conversationId: task.event.conversationId,
         text: `请求未完成（阶段：${error.stage}；错误：${error.code}）。已成功发送的附件会保留。请联系机器人管理员重试任务 ${task.taskId}。`,
         replyToMessageId: task.triggerMessageId || task.event.payload?.messageId || undefined,
         clientMessageId: `failure-${task.taskId}-${task.generation || 0}`, idempotencyKey: `failure-${task.taskId}-${task.generation || 0}` });
       if (result?.message?.id) { task.failureNotified = true; persist(); }
     } catch (error) {
       if (!safeAgentError(error).retryable) { task.notificationAttempts = 3; persist(); }
+    } finally {
+      if (!running.has(task.taskId)) { scopedClients.get(task.taskId)?.close(); scopedClients.delete(task.taskId); }
     }
   }
 
   async function execute(task, controller) {
     task.attempts += 1; task.error = null; setState(task, "running");
-    let stopThinking = () => {};
+    let stopThinking = () => {}, stopWatching = () => {};
     try {
       const authorization = await authorize(task);
       taskCheckCancelled(controller.signal);
-      stopThinking = taskStartThinking(client, task.event.conversationId, controller.signal);
+      stopWatching = watchRemoteTask(task, controller);
+      stopThinking = taskStartThinking(authorization.client, task.event.conversationId, controller.signal);
       if (!task.generated) await generate(task, authorization, controller.signal);
       if (controller.signal.aborted) throw new AgentRuntimeError("task.cancelled");
       await publish(task, controller.signal);
     } catch (error) {
       stopThinking();
+      if (error?.code === "sdk.upgrade_required" || controller.signal.reason?.code === "sdk.upgrade_required") {
+        setState(task, "failed", { error: safeAgentError(controller.signal.reason?.code === "sdk.upgrade_required" ? controller.signal.reason : error, task.state), notificationAttempts: 3 });
+        return;
+      }
       const safe = safeAgentError(error, task.state);
       if (controller.signal.aborted && closed) { setState(task, "received", { error: null }); return; }
       if (controller.signal.aborted || ["task.cancelled", "bridge.cancelled"].includes(safe.code)) { setState(task, "cancelled", { error: { code: "task.cancelled", stage: task.state, retryable: false } }); return; }
       if (safe.retryable && task.attempts < maxAttempts && safe.code !== "upload.outcome_unknown") {
         setState(task, "received", { error: safe, nextAttemptAt: now() + retryDelayMs * 2 ** (task.attempts - 1) });
       } else { setState(task, "failed", { error: safe }); await failureReceipt(task); }
-    } finally { stopThinking(); }
+    } finally {
+      stopThinking(); stopWatching();
+      scopedClients.get(task.taskId)?.close(); scopedClients.delete(task.taskId);
+    }
   }
 
   function control(taskId, action) {
     const task = tasks.find((item) => item.taskId === taskId);
     if (!task || task.expiresAt <= now()) throw new AgentRuntimeError("task.not_found");
     if (action === "cancel") {
+      if (task.remoteTask && typeof client.cancelAgentTask === "function") {
+        task.remoteCancellationPending = true; persist();
+        const cancellation = Promise.resolve().then(() => client.cancelAgentTask(task.remoteTask.id, { signal: AbortSignal.timeout(5000), timeoutMs: 5000 }))
+          .then(() => { task.remoteCancellationPending = false; persist(); }).catch(() => {});
+        remoteControls.add(cancellation); cancellation.finally(() => remoteControls.delete(cancellation));
+      }
       if (running.has(taskId)) running.get(taskId).controller.abort();
       else if (!TASK_TERMINAL.has(task.state)) setState(task, "cancelled");
       return;
@@ -597,6 +685,8 @@ export function createAgentTaskRuntime(options) {
       for (const { controller } of running.values()) controller.abort();
       await Promise.allSettled([...running.values()].map((slot) => slot.promise));
       await Promise.allSettled([...notifying.values()]);
+      await Promise.allSettled([...remoteControls]);
+      for (const scoped of scopedClients.values()) scoped.close(); scopedClients.clear();
       releaseOwner();
       for (const waiter of waiters.splice(0)) waiter();
     },

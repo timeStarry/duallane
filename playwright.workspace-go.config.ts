@@ -5,7 +5,7 @@ const apiURL = "http://127.0.0.1:8898";
 
 export default defineConfig({
   testDir: "./e2e",
-  testMatch: "workspace-v1-acceptance.spec.ts",
+  testMatch: ["workspace-v1-acceptance.spec.ts", "agent-platform-acceptance.spec.ts"],
   outputDir: ".private-test-results/workspace-go-browser",
   fullyParallel: false,
   workers: 1,

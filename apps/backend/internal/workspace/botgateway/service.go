@@ -380,6 +380,9 @@ func SafeBot(value Bot) map[string]any {
 }
 
 func (s *Service) GetMe(ctx context.Context, value *Auth) (Me, error) {
+	if AgentTaskID(ctx) != "" {
+		return Me{}, taskForbidden()
+	}
 	current, err := s.ValidateAuth(ctx, value)
 	if err != nil {
 		return Me{}, err
@@ -406,6 +409,9 @@ func normalizeIdentifier(value, code string) (string, error) {
 func (s *Service) requireConversationCurrent(ctx context.Context, value *Auth, conversationID string) (*Auth, *Conversation, error) {
 	current, err := s.ValidateAuth(ctx, value)
 	if err != nil {
+		return nil, nil, err
+	}
+	if err := s.AuthorizeAgentOperation(ctx, current, conversationID); err != nil {
 		return nil, nil, err
 	}
 	return s.requireConversationPrevalidated(ctx, current, conversationID)
@@ -477,6 +483,18 @@ func (s *Service) RequireContextGrant(ctx context.Context, value *Auth, conversa
 }
 
 func (s *Service) GetContext(ctx context.Context, value *Auth, conversationID string, options map[string]any) (map[string]any, error) {
+	if AgentTaskID(ctx) != "" {
+		result, err := s.ListAgentHistory(ctx, value, conversationID, options)
+		if err != nil {
+			return nil, err
+		}
+		_, conversation, err := s.requireConversationCurrent(ctx, value, conversationID)
+		if err != nil {
+			return nil, err
+		}
+		result["conversation"] = projectConversation(*conversation)
+		return result, nil
+	}
 	current, conversation, err := s.requireConversationCurrent(ctx, value, conversationID)
 	if err != nil {
 		return nil, err
@@ -674,6 +692,9 @@ func (s *Service) SendMessage(ctx context.Context, value *Auth, input SendMessag
 		ReplyToMessageID: hashReplyTo, Content: content,
 	}
 	result, err := s.withIdempotency(ctx, current, "message.send", key, encodedInput, func(tx Tx) (any, error) {
+		if err := s.validateAgentMessageResources(ctx, tx, current, content); err != nil {
+			return nil, err
+		}
 		var message GatewayMessage
 		var writeErr error
 		if writer, ok := s.messageWriter.(TransactionalMessageWriter); ok {
@@ -1127,6 +1148,12 @@ func (s *Service) UpdateCard(ctx context.Context, value *Auth, cardID string, in
 	if err := RequireScope(current, ScopeCardsWrite); err != nil {
 		return nil, err
 	}
+	if err := s.AuthorizeAgentOperation(ctx, current, ""); err != nil {
+		return nil, err
+	}
+	if AgentTaskID(ctx) != "" && input.Status != "" && input.Status != "active" {
+		return nil, NewError("task.operation_not_supported", "会话任务暂不支持卡片失效操作", 409)
+	}
 	if err := RejectForgedFields(input.Fields); err != nil {
 		return nil, err
 	}
@@ -1166,7 +1193,7 @@ func (s *Service) UpdateCard(ctx context.Context, value *Auth, cardID string, in
 		request.Payload = converted.Payload
 		request.RawPayload = cloneRawJSON(converted.RawPayload)
 		request.FallbackText = &fallback
-		card, err := s.cardGateway.UpdateCustomBotCard(ctx, request)
+		card, err := s.updateAgentCard(ctx, current, request)
 		if err != nil {
 			return nil, normalizeError(err)
 		}
@@ -1179,7 +1206,7 @@ func (s *Service) UpdateCard(ctx context.Context, value *Auth, cardID string, in
 		}
 		request.Payload = payload
 	}
-	card, err := s.cardGateway.UpdateCustomBotCard(ctx, request)
+	card, err := s.updateAgentCard(ctx, current, request)
 	if err != nil {
 		return nil, normalizeError(err)
 	}
@@ -1194,6 +1221,9 @@ func (s *Service) GetAttachment(ctx context.Context, value *Auth, attachmentID s
 	if err := RequireScope(current, ScopeFilesReadMetadata); err != nil {
 		return nil, err
 	}
+	if err := s.AuthorizeAgentOperation(ctx, current, ""); err != nil {
+		return nil, err
+	}
 	id, err := normalizeIdentifier(attachmentID, CodeAttachmentInvalid)
 	if err != nil {
 		return nil, err
@@ -1205,6 +1235,22 @@ func (s *Service) GetAttachment(ctx context.Context, value *Auth, attachmentID s
 	if row == nil || row.Status != "available" || row.SpaceID != current.SpaceID || (row.Visibility != "conversation" && row.Visibility != "space" && row.Visibility != "private_staging") {
 		return nil, NewError(CodeAttachmentNotFound, MessageAttachmentNotFound, 404)
 	}
+	if AgentTaskID(ctx) != "" {
+		if row.Visibility != "conversation" || row.ConversationID == nil {
+			return nil, taskForbidden()
+		}
+		task, err := s.requireAgentTask(ctx, current, AgentTaskID(ctx), *row.ConversationID)
+		if err != nil {
+			return nil, err
+		}
+		resources, ok := s.repo.(agentResourceReader)
+		if !ok {
+			return nil, taskForbidden()
+		}
+		if err := s.authorizeAgentResource(ctx, s.repo, resources, current, task, row.ID); err != nil {
+			return nil, err
+		}
+	}
 	if row.Visibility == "private_staging" || row.ConversationID == nil || strings.TrimSpace(*row.ConversationID) == "" {
 		if row.UploaderID != current.UserID {
 			return nil, NewError(CodeAttachmentNotFound, MessageAttachmentNotFound, 404)
@@ -1214,6 +1260,12 @@ func (s *Service) GetAttachment(ctx context.Context, value *Auth, attachmentID s
 			return nil, NewError(CodeAttachmentNotFound, MessageAttachmentNotFound, 404)
 		}
 		if _, err := s.RequireContextGrant(ctx, current, *row.ConversationID); err != nil {
+			return nil, err
+		}
+	}
+	if AgentTaskID(ctx) != "" {
+		encoded, _ := json.Marshal(projectAttachment(*row))
+		if err := s.consumeAgentRead(ctx, current, *row.ConversationID, int64(len(encoded))); err != nil {
 			return nil, err
 		}
 	}
@@ -1232,6 +1284,9 @@ func (s *Service) CreateAttachment(ctx context.Context, value *Auth, input Creat
 		return nil, err
 	}
 	conversationID := strings.TrimSpace(input.ConversationID)
+	if AgentTaskID(ctx) != "" && conversationID == "" {
+		return nil, taskForbidden()
+	}
 	if conversationID != "" {
 		_, _, err := s.requireConversationCurrent(ctx, current, conversationID)
 		if err != nil {
@@ -1241,6 +1296,9 @@ func (s *Service) CreateAttachment(ctx context.Context, value *Auth, input Creat
 	if s.attachmentWriter == nil {
 		return nil, NewError(CodeAttachmentUnavailable, MessageInternal, 503)
 	}
+	if err := s.ReserveAgentUploadBudget(ctx, current, conversationID); err != nil {
+		return nil, err
+	}
 	request := AttachmentCreateRequest{ActorID: current.UserID, SpaceID: current.SpaceID, ConversationID: conversationID, FileName: input.FileName, MIMEType: input.MIMEType, ByteSize: input.ByteSize, Visibility: firstNonEmpty(input.Visibility, "private_staging"), Meta: input.Meta.Safe()}
 	var result UploadReservation
 	if err := func() error {
@@ -1249,6 +1307,11 @@ func (s *Service) CreateAttachment(ctx context.Context, value *Auth, input Creat
 		return writeErr
 	}(); err != nil {
 		return nil, normalizeError(err)
+	}
+	if result.ID != "" {
+		if err := s.BindAgentUpload(ctx, current, result.ID, conversationID); err != nil {
+			return nil, err
+		}
 	}
 	return map[string]any{"upload": result}, nil
 }
@@ -1273,6 +1336,9 @@ func (s *Service) Typing(ctx context.Context, value *Auth, conversationID string
 }
 
 func (s *Service) Acknowledge(ctx context.Context, value *Auth, input AcknowledgeInput) (AcknowledgeResult, error) {
+	if AgentTaskID(ctx) != "" {
+		return AcknowledgeResult{}, taskForbidden()
+	}
 	current, err := s.ValidateAuth(ctx, value)
 	if err != nil {
 		return AcknowledgeResult{}, err
@@ -1314,6 +1380,9 @@ func normalizeSequence(value int64, allowZero bool) (int64, error) {
 }
 
 func (s *Service) Replay(ctx context.Context, value *Auth, input ReplayInput) (ReplayResult, error) {
+	if AgentTaskID(ctx) != "" {
+		return ReplayResult{}, taskForbidden()
+	}
 	current, err := s.ValidateAuth(ctx, value)
 	if err != nil {
 		return ReplayResult{}, err
@@ -1539,7 +1608,7 @@ func (s *Service) authorizeValidatedDelivery(ctx context.Context, current *Auth,
 	if err != nil {
 		return false, nil, normalizeError(err)
 	}
-	if sender == nil || sender.Kind != "human" || sender.Role == "auditor" || sender.ID == current.UserID {
+	if sender == nil || (sender.Kind != "human" && sender.Kind != "bot") || sender.Role == "auditor" || sender.ID == current.UserID {
 		return false, nil, nil
 	}
 	isOwnerDirect := conversation.Type == "direct" && current.OwnerUserID != "" && sender.ID == current.OwnerUserID
@@ -1560,6 +1629,16 @@ func (s *Service) authorizeValidatedDelivery(ctx context.Context, current *Auth,
 	if settings == nil {
 		return false, nil, nil
 	}
+	if sender.Kind == "bot" {
+		if conversation.Type != "group" || event.EventType != "message.created" {
+			return false, nil, nil
+		}
+		allowed, sourceErr := s.authorizeAgentBotSource(ctx, current, event, settings)
+		if sourceErr != nil || !allowed {
+			return false, nil, sourceErr
+		}
+		return s.resolveTrigger(ctx, current, event, conversation, settings)
+	}
 	visible, err := s.senderVisible(ctx, current, sender.ID, conversation, settings)
 	if err != nil || !visible {
 		return false, nil, err
@@ -1573,6 +1652,9 @@ func isGatewayError(err error) bool {
 }
 
 func (s *Service) senderVisible(ctx context.Context, value *Auth, senderID string, conversation *Conversation, settings *Settings) (bool, error) {
+	if settings != nil && settings.AccessPolicy != nil {
+		return s.taskRequestorAllowed(ctx, s.repo, settings, value, senderID, conversation.Type)
+	}
 	// Ironclad Rule: Bot creator always retains visibility and trigger access.
 	if value.OwnerUserID != "" && senderID == value.OwnerUserID {
 		return true, nil
@@ -1822,7 +1904,11 @@ func (s *Service) withIdempotency(ctx context.Context, value *Auth, operation, k
 	if s == nil || s.repo == nil {
 		return nil, internalError("gateway idempotency", errors.New("repository is required"))
 	}
-	requestHash, err := hashGatewayRequest(input)
+	hashInput := input
+	if id := AgentTaskID(ctx); id != "" {
+		hashInput = []any{id, input}
+	}
+	requestHash, err := hashGatewayRequest(hashInput)
 	if err != nil {
 		return nil, internalError("hash gateway request", err)
 	}
@@ -1833,6 +1919,25 @@ func (s *Service) withIdempotency(ctx context.Context, value *Auth, operation, k
 		}
 		if err := s.validateIdempotentOperationInTx(ctx, tx, value, operation, false); err != nil {
 			return err
+		}
+		if taskID := AgentTaskID(ctx); taskID != "" {
+			store, ok := tx.(AgentTaskMutation)
+			if !ok {
+				return taskForbidden()
+			}
+			if err := store.LockAgentAuthorization(ctx, taskID, s.nowUTC()); err != nil {
+				return err
+			}
+			task, err := store.GetAgentTask(ctx, taskID)
+			if err != nil {
+				return err
+			}
+			if err := s.validateAgentTask(ctx, tx, store, value, task, ""); err != nil {
+				return err
+			}
+			if err := store.ConsumeAgentTaskBudget(ctx, task.RootTaskID, 0, 0, 0, s.nowUTC()); err != nil {
+				return err
+			}
 		}
 		existing, err := tx.GetIdempotency(ctx, value.BotID, operation, key, s.nowUTC())
 		if err != nil {
@@ -1847,8 +1952,12 @@ func (s *Service) withIdempotency(ctx context.Context, value *Auth, operation, k
 			}
 			return nil
 		}
+
 		result, err = callback(tx)
 		if err != nil {
+			return err
+		}
+		if err := s.agentTaskWriteInTx(ctx, tx, value, result); err != nil {
 			return err
 		}
 		// Revalidate immediately before the idempotency row is written. A token
@@ -1882,6 +1991,15 @@ func (s *Service) withIdempotency(ctx context.Context, value *Auth, operation, k
 				return internalError("decode gateway idempotency winner", err)
 			}
 		}
+		if id := AgentTaskID(ctx); id != "" {
+			store, ok := tx.(AgentTaskMutation)
+			if !ok {
+				return taskForbidden()
+			}
+			if err := store.RecordAgentOperation(ctx, id, value.BotID, operation, key); err != nil {
+				return err
+			}
+		}
 		return nil
 	})
 	if err != nil {
@@ -1913,10 +2031,12 @@ func (s *Service) validateIdempotentOperationInTx(ctx context.Context, tx Tx, va
 	}
 	scope := ""
 	switch operation {
-	case "message.send":
+	case "message.send", "message.edit":
 		scope = ScopeMessagesSend
-	case "card.send":
+	case "card.send", "card.update":
 		scope = ScopeCardsWrite
+	case "file.complete":
+		scope = ScopeFilesWrite
 	}
 	if scope != "" {
 		if err := RequireScope(current, scope); err != nil {

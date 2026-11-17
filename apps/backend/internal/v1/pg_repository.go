@@ -14,6 +14,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/botaccess"
 )
 
 type PGRepository struct {
@@ -254,6 +255,7 @@ func (r *PGRepository) GetBootstrap(ctx context.Context, actorID string, now tim
 			coalesce(up_bot.prefs_json, '{}'),
 			u.kind,
 			sm.role,
+			COALESCE(b_meta.id, '') AS bot_id,
 			b_meta.id IS NOT NULL AS is_external_bot,
 			CASE
 				WHEN b_meta.id IS NULL THEN FALSE
@@ -261,7 +263,17 @@ func (r *PGRepository) GetBootstrap(ctx context.Context, actorID string, now tim
 				WHEN bc_meta.status = 'connected' AND COALESCE(bc_meta.last_heartbeat_at, bc_meta.connected_at) >= $4 THEN TRUE
 				WHEN EXISTS (SELECT 1 FROM bot_webhooks bw WHERE bw.bot_id = b_meta.id AND bw.enabled = TRUE) THEN TRUE
 				ELSE FALSE
-			END AS bot_online
+			END AS bot_online,
+			COALESCE(b_meta.owner_user_id, ''),
+			COALESCE(bs_meta.visibility_policy, b_meta.visibility_policy, 'private') AS bot_visibility_policy,
+			COALESCE(bs_meta.allow_direct = 1, TRUE) AS bot_allow_direct,
+			COALESCE(bs_meta.allow_group = 1, FALSE) AS bot_allow_group,
+			COALESCE(bs_meta.access_policy, 'null'::jsonb),
+            EXISTS(SELECT 1 FROM conversation_members self_cm
+              JOIN conversations shared_group ON shared_group.id=self_cm.conversation_id AND shared_group.space_id=$1 AND shared_group.type='group'
+              JOIN conversation_members bot_cm ON bot_cm.conversation_id=shared_group.id AND bot_cm.user_id=u.id AND bot_cm.removed_at IS NULL
+              JOIN workspace_agent_bot_group_policies gp ON gp.bot_id=b_meta.id AND gp.conversation_id=shared_group.id AND gp.space_id=$1 AND gp.status='active'
+              WHERE self_cm.user_id=$2 AND self_cm.removed_at IS NULL) AS bot_shared_approved_group
 		FROM space_members sm
 		JOIN users u ON u.id = sm.user_id
 		LEFT JOIN user_remarks ur ON ur.owner_user_id = $2 AND ur.target_user_id = u.id
@@ -279,6 +291,7 @@ func (r *PGRepository) GetBootstrap(ctx context.Context, actorID string, now tim
 					u.kind = 'bot'
 					AND EXISTS (
 						SELECT 1 FROM workspace_agent_bots b
+						LEFT JOIN workspace_agent_bot_settings b_settings ON b_settings.bot_id = b.id AND b_settings.space_id = b.space_id
 						WHERE b.space_id = $1
 							AND b.bot_user_id = u.id
 							AND (
@@ -286,7 +299,7 @@ func (r *PGRepository) GetBootstrap(ctx context.Context, actorID string, now tim
 								OR (
 									b.status = 'active'
 									AND (
-										b.visibility_policy IN ('space', 'space_members', 'groups')
+									(b.visibility_policy IN ('space', 'space_members', 'groups') OR b_settings.access_policy IS NOT NULL)
 										OR EXISTS (
 											SELECT 1 FROM workspace_agent_bot_visibility_members bvm
 											WHERE bvm.bot_id = b.id AND bvm.space_id = $1 AND bvm.user_id = $2
@@ -321,15 +334,31 @@ func (r *PGRepository) GetBootstrap(ctx context.Context, actorID string, now tim
 	memberByID := make(map[string]V1BootstrapMember, 16)
 	for memberRows.Next() {
 		var mID, mGitHub, mDisplay, mNick, mRemark, mDesc, mAvatar, mBotPrefsRaw, mKind, mRole string
+		var botID, botOwnerID, botVisibility string
+		var botAllowDirect, botAllowGroup, botSharedApprovedGroup bool
+		var rawAccessPolicy []byte
 		var isExternalBot, botOnline bool
-		if scanErr := memberRows.Scan(&mID, &mGitHub, &mDisplay, &mNick, &mRemark, &mDesc, &mAvatar, &mBotPrefsRaw, &mKind, &mRole, &isExternalBot, &botOnline); scanErr != nil {
+		if scanErr := memberRows.Scan(&mID, &mGitHub, &mDisplay, &mNick, &mRemark, &mDesc, &mAvatar, &mBotPrefsRaw, &mKind, &mRole, &botID, &isExternalBot, &botOnline, &botOwnerID, &botVisibility, &botAllowDirect, &botAllowGroup, &rawAccessPolicy, &botSharedApprovedGroup); scanErr != nil {
 			memberRows.Close()
 			return V1BootstrapResponse{}, scanErr
+		}
+		if isExternalBot {
+			access, accessErr := botaccess.NewRecord(botID, r.spaceID, botOwnerID, mID, "active", botVisibility, botAllowDirect, botAllowGroup, rawAccessPolicy)
+			if accessErr != nil {
+				memberRows.Close()
+				return V1BootstrapResponse{}, accessErr
+			}
+			if access.Policy != nil && !access.DiscoveryAllows(actorID, true, false) && !(botSharedApprovedGroup && access.HumanGroupAllows(actorID, true, true)) {
+				continue
+			}
 		}
 		projected := projectBootstrapMember(
 			mID, mGitHub, mDisplay, mNick, mRemark, mAvatar, mKind, mRole, actorID, actorRole,
 		)
 		if mKind == "bot" {
+			if isExternalBot && strings.TrimSpace(botID) != "" && mID != "usr_system_beacon" && mID != "usr_system_echo" {
+				projected.BotID = strings.TrimSpace(botID)
+			}
 			if strings.TrimSpace(mDesc) != "" {
 				projected.Description = strings.TrimSpace(mDesc)
 			}
@@ -374,6 +403,30 @@ func (r *PGRepository) GetBootstrap(ctx context.Context, actorID string, now tim
 				FROM conversation_members cm
 				JOIN conversations c ON c.id = cm.conversation_id AND c.space_id = $1
 				WHERE cm.user_id = $2 AND cm.removed_at IS NULL
+					AND NOT EXISTS (
+						SELECT 1
+						FROM conversation_members bot_cm
+						JOIN workspace_agent_bots bot_access ON bot_access.space_id = c.space_id
+							AND bot_access.bot_user_id = bot_cm.user_id
+							AND bot_access.status <> 'deleted'
+						LEFT JOIN workspace_agent_bot_settings bot_settings ON bot_settings.bot_id = bot_access.id
+							AND bot_settings.space_id = c.space_id
+						WHERE c.type = 'direct' AND bot_cm.conversation_id = c.id
+							AND bot_cm.user_id <> cm.user_id
+							AND bot_settings.access_policy IS NOT NULL
+							AND (
+								bot_access.status <> 'active'
+								OR COALESCE(bot_settings.allow_direct = 1, TRUE) = FALSE
+								OR NOT (
+									(bot_settings.access_policy->'direct'->>'audience' = 'owner_only' AND bot_access.owner_user_id = cm.user_id)
+									OR (bot_settings.access_policy->'direct'->>'audience' = 'specified_members'
+										AND (bot_access.owner_user_id = cm.user_id OR EXISTS (
+											SELECT 1 FROM jsonb_array_elements_text(CASE WHEN jsonb_typeof(bot_settings.access_policy->'direct'->'memberIds') = 'array' THEN bot_settings.access_policy->'direct'->'memberIds' ELSE '[]'::jsonb END) allowed(member_id)
+											WHERE allowed.member_id = cm.user_id)))
+									OR bot_settings.access_policy->'direct'->>'audience' = 'space_members'
+								)
+							)
+					)
 			)
 			SELECT
 				uc.id,
@@ -702,6 +755,25 @@ func (r *PGRepository) SyncDelta(ctx context.Context, actorID string, sinceSeq i
 				WHERE cm.conversation_id = we.conversation_id AND cm.user_id = $3 AND cm.removed_at IS NULL
 			)
 		  )
+		  AND NOT EXISTS (
+			SELECT 1
+			FROM conversation_members bot_cm
+			JOIN conversations bot_conversation ON bot_conversation.id = bot_cm.conversation_id AND bot_conversation.type = 'direct'
+			JOIN workspace_agent_bots bot_access ON bot_access.space_id = we.space_id
+				AND bot_access.bot_user_id = bot_cm.user_id
+				AND bot_access.status <> 'deleted'
+			LEFT JOIN workspace_agent_bot_settings bot_settings ON bot_settings.bot_id = bot_access.id
+				AND bot_settings.space_id = we.space_id
+			WHERE bot_cm.conversation_id = we.conversation_id
+				AND bot_cm.user_id <> $3
+				AND bot_settings.access_policy IS NOT NULL
+				AND (bot_access.status <> 'active' OR COALESCE(bot_settings.allow_direct = 1, TRUE) = FALSE OR NOT (
+					(bot_settings.access_policy->'direct'->>'audience' = 'owner_only' AND bot_access.owner_user_id = $3)
+					OR (bot_settings.access_policy->'direct'->>'audience' = 'specified_members' AND (bot_access.owner_user_id = $3 OR EXISTS (
+						SELECT 1 FROM jsonb_array_elements_text(CASE WHEN jsonb_typeof(bot_settings.access_policy->'direct'->'memberIds') = 'array' THEN bot_settings.access_policy->'direct'->'memberIds' ELSE '[]'::jsonb END) allowed(member_id) WHERE allowed.member_id = $3)))
+					OR bot_settings.access_policy->'direct'->>'audience' = 'space_members'
+				))
+		  )
 		ORDER BY we.seq ASC
 		LIMIT $4
 	`, r.spaceID, sinceSeq, actorID, limit+1)
@@ -756,6 +828,25 @@ func (r *PGRepository) Search(ctx context.Context, actorID, query, scope string,
 			LEFT JOIN users u ON u.id = m.author_id
 			WHERE m.space_id = $2
 			  AND m.deleted_at IS NULL
+			  AND NOT EXISTS (
+				SELECT 1
+				FROM conversation_members bot_cm
+				JOIN conversations bot_conversation ON bot_conversation.id = bot_cm.conversation_id AND bot_conversation.type = 'direct'
+				JOIN workspace_agent_bots bot_access ON bot_access.space_id = m.space_id
+					AND bot_access.bot_user_id = bot_cm.user_id
+					AND bot_access.status <> 'deleted'
+				LEFT JOIN workspace_agent_bot_settings bot_settings ON bot_settings.bot_id = bot_access.id
+					AND bot_settings.space_id = m.space_id
+				WHERE bot_cm.conversation_id = m.conversation_id
+					AND bot_cm.user_id <> $1
+					AND bot_settings.access_policy IS NOT NULL
+					AND (bot_access.status <> 'active' OR COALESCE(bot_settings.allow_direct = 1, TRUE) = FALSE OR NOT (
+						(bot_settings.access_policy->'direct'->>'audience' = 'owner_only' AND bot_access.owner_user_id = $1)
+						OR (bot_settings.access_policy->'direct'->>'audience' = 'specified_members' AND (bot_access.owner_user_id = $1 OR EXISTS (
+							SELECT 1 FROM jsonb_array_elements_text(CASE WHEN jsonb_typeof(bot_settings.access_policy->'direct'->'memberIds') = 'array' THEN bot_settings.access_policy->'direct'->'memberIds' ELSE '[]'::jsonb END) allowed(member_id) WHERE allowed.member_id = $1)))
+						OR bot_settings.access_policy->'direct'->>'audience' = 'space_members'
+					))
+			  )
 			  AND (
 				to_tsvector('simple', coalesce(m.plain_text, '')) @@ plainto_tsquery('simple', $3)
 				OR m.plain_text ILIKE $4
@@ -836,6 +927,25 @@ func (r *PGRepository) Search(ctx context.Context, actorID, query, scope string,
 					SELECT 1 FROM conversation_members cm
 					WHERE cm.conversation_id = a.conversation_id AND cm.user_id = $3 AND cm.removed_at IS NULL
 				))
+			  )
+			  AND NOT EXISTS (
+				SELECT 1
+				FROM conversation_members bot_cm
+				JOIN conversations bot_conversation ON bot_conversation.id = bot_cm.conversation_id AND bot_conversation.type = 'direct'
+				JOIN workspace_agent_bots bot_access ON bot_access.space_id = a.space_id
+					AND bot_access.bot_user_id = bot_cm.user_id
+					AND bot_access.status <> 'deleted'
+				LEFT JOIN workspace_agent_bot_settings bot_settings ON bot_settings.bot_id = bot_access.id
+					AND bot_settings.space_id = a.space_id
+				WHERE bot_cm.conversation_id = COALESCE(direct_src.conversation_id, linked_msg.conversation_id, a.conversation_id)
+					AND bot_cm.user_id <> $3
+					AND bot_settings.access_policy IS NOT NULL
+					AND (bot_access.status <> 'active' OR COALESCE(bot_settings.allow_direct = 1, TRUE) = FALSE OR NOT (
+						(bot_settings.access_policy->'direct'->>'audience' = 'owner_only' AND bot_access.owner_user_id = $3)
+						OR (bot_settings.access_policy->'direct'->>'audience' = 'specified_members' AND (bot_access.owner_user_id = $3 OR EXISTS (
+							SELECT 1 FROM jsonb_array_elements_text(CASE WHEN jsonb_typeof(bot_settings.access_policy->'direct'->'memberIds') = 'array' THEN bot_settings.access_policy->'direct'->'memberIds' ELSE '[]'::jsonb END) allowed(member_id) WHERE allowed.member_id = $3)))
+						OR bot_settings.access_policy->'direct'->>'audience' = 'space_members'
+					))
 			  )
 			ORDER BY a.created_at DESC
 			LIMIT $4
@@ -1007,6 +1117,8 @@ func (r *PGRepository) ListBotConversations(ctx context.Context, botID, botUserI
 			COALESCE(bs.visibility_policy, b.visibility_policy, 'private') AS vis_policy,
 			COALESCE(bs.allow_direct = 1, TRUE) AS allow_direct,
 			COALESCE(bs.allow_group = 1, FALSE) AND b.conversation_policy = 'group-capable' AS allow_group_capable,
+			b.owner_user_id AS bot_owner_id,
+			bs.access_policy,
 			COALESCE(bs.trigger_policy, b.trigger_policy, 'mention-or-command') AS trigger_policy,
 			cg.allow_trigger AS raw_grant_trigger,
 			cg.allow_context AS raw_grant_context,
@@ -1015,6 +1127,7 @@ func (r *PGRepository) ListBotConversations(ctx context.Context, botID, botUserI
 				COALESCE(NULLIF(bs.max_context_messages, 0), 50)
 			) AS max_messages,
 			COALESCE(gp.status, '') AS group_policy_status,
+			COALESCE(peer.peer_id, '') AS peer_id,
 			COALESCE(peer.peer_visible, FALSE) AS peer_visible,
 			COALESCE(latest.created_at, c.created_at) AS activity_at
 		FROM conversation_members cm
@@ -1060,10 +1173,13 @@ func (r *PGRepository) ListBotConversations(ctx context.Context, botID, botUserI
 			visPolicy         string
 			allowDirect       bool
 			allowGroupCapable bool
+			botOwnerID        string
+			rawAccessPolicy   []byte
 			triggerPolicy     string
 			rawGrantTrigger   *int
 			rawGrantContext   *int
 			peerVisible       bool
+			peerID            string
 			activityAt        time.Time
 		)
 		if err := rows.Scan(
@@ -1075,11 +1191,14 @@ func (r *PGRepository) ListBotConversations(ctx context.Context, botID, botUserI
 			&visPolicy,
 			&allowDirect,
 			&allowGroupCapable,
+			&botOwnerID,
+			&rawAccessPolicy,
 			&triggerPolicy,
 			&rawGrantTrigger,
 			&rawGrantContext,
 			&item.MaxMessages,
 			&item.GroupPolicyStatus,
+			&peerID,
 			&peerVisible,
 			&activityAt,
 		); err != nil {
@@ -1087,6 +1206,10 @@ func (r *PGRepository) ListBotConversations(ctx context.Context, botID, botUserI
 		}
 
 		activeBot := botStatus == "active"
+		accessRecord, accessErr := botaccess.NewRecord(botID, r.spaceID, botOwnerID, botUserID, botStatus, visPolicy, allowDirect, allowGroupCapable, rawAccessPolicy)
+		if accessErr != nil {
+			return nil, accessErr
+		}
 		if item.Type == "direct" {
 			item.TriggerMode = "direct"
 			grantTrigger := true
@@ -1100,17 +1223,15 @@ func (r *PGRepository) ListBotConversations(ctx context.Context, botID, botUserI
 			if rawGrantContext != nil {
 				grantContext = *rawGrantContext == 1
 			}
-			memberAllowed := item.IsOwnerDirect ||
-				visPolicy == "space_members" ||
-				(visPolicy == "specified_members" && peerVisible)
-			sendAllowed := activeBot && (item.IsOwnerDirect || allowDirect)
+			memberAllowed := accessRecord.DirectAllows(peerID, true, peerVisible)
+			sendAllowed := activeBot && memberAllowed
 			item.AllowSend = sendAllowed
 			item.AllowContext = sendAllowed && grantContext
 			item.AllowTrigger = sendAllowed && memberAllowed && grantTrigger
 			switch {
 			case !activeBot:
 				item.BlockReason = "bot_paused"
-			case !item.IsOwnerDirect && !allowDirect:
+			case !allowDirect:
 				item.BlockReason = "direct_disabled"
 			case !memberAllowed:
 				item.BlockReason = "peer_not_in_visibility"
@@ -1348,6 +1469,19 @@ func canInviteSpaceMemberTx(ctx context.Context, tx pgx.Tx, spaceID, actorID, ac
 	if summary.Kind == "bot" {
 		summary.Role = "member"
 		summary.GitHubLogin = ""
+		access, accessErr := botaccess.LoadByUserID(ctx, tx, spaceID, targetID)
+		if accessErr == nil && access.Policy != nil {
+			// A V2 bot may be admitted through the explicit owner/manager
+			// workflow only. A group shared with the actor is not a DM or
+			// cross-group invitation grant.
+			if access.OwnerUserID != actorID || !access.IsActive() || !access.AllowGroup {
+				return GroupMemberSummary{}, fmt.Errorf("%w: 该机器人需要所有者显式授权后才能加入群聊", ErrForbidden)
+			}
+			return summary, nil
+		}
+		if accessErr != nil && !errors.Is(accessErr, pgx.ErrNoRows) {
+			return GroupMemberSummary{}, accessErr
+		}
 		var botAllowed bool
 		if err := tx.QueryRow(ctx, `
 			SELECT EXISTS (
@@ -1834,6 +1968,26 @@ func ensureBotGroupAccessTx(ctx context.Context, tx pgx.Tx, spaceID, actorID, co
 			return nil
 		}
 		return err
+	}
+	access, accessErr := botaccess.Load(ctx, tx, spaceID, botID)
+	if accessErr != nil {
+		return accessErr
+	}
+	if access.Policy != nil {
+		var groupRole string
+		if err := tx.QueryRow(ctx, `
+			SELECT COALESCE(role, 'member')
+			FROM conversation_members
+			WHERE conversation_id = $1 AND user_id = $2 AND removed_at IS NULL
+		`, conversationID, actorID).Scan(&groupRole); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrForbidden
+			}
+			return err
+		}
+		if groupRole != "owner" && groupRole != "admin" {
+			return ErrForbidden
+		}
 	}
 	if ownerID == actorID {
 		if _, err := tx.Exec(ctx, `

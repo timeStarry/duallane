@@ -1,6 +1,6 @@
 # Agent runtime, tasks, and artifacts
 
-Status: implemented for SDK/App 1.1, under validation and review. This contract
+Status: SDK/App 1.2 foundation implemented, validation and production activation pending. This contract
 extends the [Bot platform requirements](WORKSPACE_AGENT_BOT_PLATFORM_REQUIREMENTS.md).
 It does not authorize production activation or changes to an installed Agent.
 
@@ -140,6 +140,19 @@ Same-version different bytes are reported as drift. Auto-update does not replace
 an unregistered or locally modified executable or touch bridge/policy/supervisor
 files. Credentials are reused; updating never requires automatic re-pairing.
 
+App 1.2 enforces SDK admission for every Bot, independently of access-policy
+version. All setup, Bot HTTP and WebSocket requests declare
+`X-DualLane-SDK-Version`; only compatible stable 1.x versions at least 1.2.0 are
+accepted. Missing/invalid/older/incompatible declarations return 426
+`sdk.upgrade_required` with safe upgrade locations. The runtime stops retries
+and requires a verified update while preserving its profile, bridge and policy.
+The declaration is public compatibility metadata, never identity or authority;
+current authentication, scopes, task and object checks remain mandatory.
+Human Session APIs, public downloads, health checks and P2P do not use this gate.
+WebSocket adapters may declare the same version through the public subprotocol
+`duallane-agent-sdk-1.2.0`; conflicts and duplicate declarations fail closed.
+Bot authentication remains mandatory and credentials never move to URLs.
+
 Implementation order: transport/authorization regressions; structured task and
 artifact foundations; bounded media and incoming attachments; recovery/observability;
 publication manifests and integration documentation. Each stage records tests
@@ -184,3 +197,43 @@ attachment publication, public-media retrieval and cross-turn reuse with that
 Agent's actual bridge. Keep its command, group policy and supervisor separate
 from the official runtime. The implementation does not update the installed
 Comet service or activate an application release.
+
+## Task authorization and on-demand context (1.2)
+
+An opt-in V2 access policy makes all conversation business operations task-bound.
+A task is created only from an authorized delivered `message.created` event. The
+server binds the token, Bot, conversation, exact input version and current human
+requester; a Bot child inherits the original requester and root budgets. A task
+reference is not a credential. Omitting it cannot restore a V2 Bot's broad Token
+business authority. Legacy policy is retained until an owner explicitly opts in;
+the minimum SDK admission requirement still applies to those Bots.
+
+The initial SDK context has at most twelve recent messages. Exact message reads,
+keyset history/search and members are exposed consistently in JS, CLI and task
+MCP. Queries return scope/coverage, truncation and pagination. Conversation grants,
+owner history window, current membership/visibility and cumulative budgets all
+apply; a missing result is not proof of absence outside that range. Ordinary
+messages only: private topics/threads and recalled/hidden messages are excluded.
+Attachment content additionally needs file scope plus current context consent.
+
+Root limits are thirty minutes, 64 content reads, 32 MiB read bytes, 24 writes,
+12 children and depth six. The server is authoritative. Input edit/recall, current
+authorization changes, cancellation and expiry invalidate further operations.
+SDK polls task state; generic state-event subscriptions and snapshot resync are
+not implemented (`stateEvents=false`). Thinking stops renewing on task termination
+and expires after its short lease; cancellation does not retract committed output.
+
+Only the trusted control layer holds the Bot Token. The command bridge attaches a
+loopback task-tool broker/MCP adapter; models receive schemas and logical IDs,
+not operator tools or credentials. The bridge still owns OS sandboxing, model
+history isolation and actual image/search/generation capabilities. The supplied
+[connection Skill](../apps/web/public/integrations/duallane-agent/SKILL.md) documents
+that split and must be loaded at integration (or its equivalent versioned
+contract on a host without Skills).
+
+Writes stay in the triggering conversation. Message edits require an opaque
+expected version and current-task provenance; mixed content must be explicitly
+replaced in full. Card updates require revision and the original `card.send`
+receipt for that task; quoting a card does not transfer ownership. Conflicts are
+not automatically overwritten. Operation-result queries distinguish committed
+from unknown without treating transport ACK or timeout as publication evidence.

@@ -26,6 +26,7 @@ import (
 	workspacecards "github.com/timestarry/duallane/apps/backend/internal/workspace/cards"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/feishucards"
 	workspacemessages "github.com/timestarry/duallane/apps/backend/internal/workspace/messages"
+	sdkgate "github.com/timestarry/duallane/apps/backend/internal/workspace/sdkgate"
 )
 
 func TestBotGatewayHTTPToPGExplicitFallbackHashReplay(t *testing.T) {
@@ -62,6 +63,7 @@ func TestBotGatewayHTTPToPGExplicitFallbackHashReplay(t *testing.T) {
 	for attempt := 0; attempt < 2; attempt++ {
 		request := httptest.NewRequest(http.MethodPost, "/api/bot-gateway/v1/cards", strings.NewReader(body))
 		request.Header.Set("Authorization", "Bearer "+rawToken)
+		request.Header.Set(sdkgate.SDKVersionHeader, sdkgate.MinimumSDKVersion)
 		request.Header.Set("Content-Type", "application/json")
 		response := httptest.NewRecorder()
 		router.ServeHTTP(response, request)

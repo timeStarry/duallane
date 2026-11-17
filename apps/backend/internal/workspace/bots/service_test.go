@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/auth"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/botpolicy"
 )
 
 const testSpaceID = "spc_default"
@@ -28,9 +29,12 @@ type fakeState struct {
 	setups       map[string]SetupSessionRecord
 	direct       map[string]bool
 	groupMembers map[string]GroupConversationRecord
-	members      map[string]bool
-	audits       []AuditInput
-	auditErr     error
+	// groupMembersByActor lets policy tests model the real repository query,
+	// where membership and the space role are evaluated for the requested user.
+	groupMembersByActor map[string]map[string]GroupConversationRecord
+	members             map[string]bool
+	audits              []AuditInput
+	auditErr            error
 }
 
 type fakeRepository struct {
@@ -46,16 +50,17 @@ func newFakeRepository() *fakeRepository {
 			"usr_owner":  {ID: "usr_owner", GitHubLogin: "owner", Kind: "human", Role: "owner"},
 			"usr_member": {ID: "usr_member", GitHubLogin: "member", Kind: "human", Role: "member"},
 		},
-		bots:         map[string]BotRecord{},
-		settings:     map[string]SettingsRecord{},
-		connections:  map[string]ConnectionRecord{},
-		groups:       map[string][]GroupPolicyRecord{},
-		grants:       map[string]ContextGrantRecord{},
-		tokens:       map[string]TokenRecord{},
-		setups:       map[string]SetupSessionRecord{},
-		direct:       map[string]bool{},
-		groupMembers: map[string]GroupConversationRecord{},
-		members:      map[string]bool{},
+		bots:                map[string]BotRecord{},
+		settings:            map[string]SettingsRecord{},
+		connections:         map[string]ConnectionRecord{},
+		groups:              map[string][]GroupPolicyRecord{},
+		grants:              map[string]ContextGrantRecord{},
+		tokens:              map[string]TokenRecord{},
+		setups:              map[string]SetupSessionRecord{},
+		direct:              map[string]bool{},
+		groupMembers:        map[string]GroupConversationRecord{},
+		groupMembersByActor: map[string]map[string]GroupConversationRecord{},
+		members:             map[string]bool{},
 	}}
 }
 
@@ -304,9 +309,16 @@ func (tx *fakeTx) IsDirectConversation(_ context.Context, _, conversationID, _, 
 	return tx.state.direct[conversationID], nil
 }
 
-func (r *fakeRepository) GetGroupManager(_ context.Context, _, conversationID, _ string) (*GroupConversationRecord, error) {
+func (r *fakeRepository) GetGroupManager(_ context.Context, _, conversationID, actorID string) (*GroupConversationRecord, error) {
 	var result *GroupConversationRecord
 	err := r.read(func(state *fakeState) error {
+		if byActor := state.groupMembersByActor[actorID]; byActor != nil {
+			if value, ok := byActor[conversationID]; ok {
+				copy := value
+				result = &copy
+				return nil
+			}
+		}
 		value, ok := state.groupMembers[conversationID]
 		if ok {
 			result = &value
@@ -316,7 +328,13 @@ func (r *fakeRepository) GetGroupManager(_ context.Context, _, conversationID, _
 	return result, err
 }
 
-func (tx *fakeTx) GetGroupManager(_ context.Context, _, conversationID, _ string) (*GroupConversationRecord, error) {
+func (tx *fakeTx) GetGroupManager(_ context.Context, _, conversationID, actorID string) (*GroupConversationRecord, error) {
+	if byActor := tx.state.groupMembersByActor[actorID]; byActor != nil {
+		if value, ok := byActor[conversationID]; ok {
+			copy := value
+			return &copy, nil
+		}
+	}
 	value, ok := tx.state.groupMembers[conversationID]
 	if !ok {
 		return nil, nil
@@ -660,7 +678,7 @@ func (tx *fakeTx) WriteAudit(_ context.Context, input AuditInput) error {
 }
 
 func cloneState(source *fakeState) *fakeState {
-	result := &fakeState{actors: map[string]*auth.Actor{}, bots: map[string]BotRecord{}, settings: map[string]SettingsRecord{}, connections: map[string]ConnectionRecord{}, groups: map[string][]GroupPolicyRecord{}, grants: map[string]ContextGrantRecord{}, tokens: map[string]TokenRecord{}, setups: map[string]SetupSessionRecord{}, direct: map[string]bool{}, groupMembers: map[string]GroupConversationRecord{}, members: map[string]bool{}, audits: append([]AuditInput{}, source.audits...), auditErr: source.auditErr}
+	result := &fakeState{actors: map[string]*auth.Actor{}, bots: map[string]BotRecord{}, settings: map[string]SettingsRecord{}, connections: map[string]ConnectionRecord{}, groups: map[string][]GroupPolicyRecord{}, grants: map[string]ContextGrantRecord{}, tokens: map[string]TokenRecord{}, setups: map[string]SetupSessionRecord{}, direct: map[string]bool{}, groupMembers: map[string]GroupConversationRecord{}, groupMembersByActor: map[string]map[string]GroupConversationRecord{}, members: map[string]bool{}, audits: append([]AuditInput{}, source.audits...), auditErr: source.auditErr}
 	for id, actor := range source.actors {
 		copied := *actor
 		result.actors[id] = &copied
@@ -692,6 +710,12 @@ func cloneState(source *fakeState) *fakeState {
 	for id, value := range source.groupMembers {
 		result.groupMembers[id] = value
 	}
+	for actorID, byConversation := range source.groupMembersByActor {
+		result.groupMembersByActor[actorID] = map[string]GroupConversationRecord{}
+		for conversationID, value := range byConversation {
+			result.groupMembersByActor[actorID][conversationID] = value
+		}
+	}
 	for id, value := range source.members {
 		result.members[id] = value
 	}
@@ -712,6 +736,7 @@ func cloneBotPtr(value *BotRecord) *BotRecord {
 func cloneSettings(value SettingsRecord) SettingsRecord {
 	value.AllowedMemberIDs = append([]string{}, value.AllowedMemberIDs...)
 	value.WelcomeMessage, value.Description, value.AvatarURL = cloneString(value.WelcomeMessage), cloneString(value.Description), cloneString(value.AvatarURL)
+	value.AccessPolicy = cloneAccessPolicy(value.AccessPolicy)
 	return value
 }
 func cloneSettingsPtr(value *SettingsRecord) *SettingsRecord {
@@ -757,6 +782,47 @@ func cloneTime(value *time.Time) *time.Time {
 
 func testService(repo Repository, now *time.Time, sequence *atomic.Int64) *Service {
 	return NewService(ServiceOptions{Repository: repo, SpaceID: testSpaceID, Now: func() time.Time { return *now }, IDFactory: func() (string, error) { return fmt.Sprintf("id-%016d", sequence.Add(1)), nil }, TokenFactory: func() (string, error) { return "", errors.New("test token factory not configured") }})
+}
+
+func setFakeGroupMember(repo *fakeRepository, actorID, conversationID, role string, isMember bool) {
+	if repo.state.groupMembersByActor[actorID] == nil {
+		repo.state.groupMembersByActor[actorID] = map[string]GroupConversationRecord{}
+	}
+	repo.state.groupMembersByActor[actorID][conversationID] = GroupConversationRecord{ID: conversationID, Type: "group", IsMember: isMember, Role: role}
+}
+
+func newGroupPolicyFixture(t *testing.T, ownerRole string) (*fakeRepository, *Service, Bot) {
+	t.Helper()
+	repo := newFakeRepository()
+	repo.state.actors["usr_admin"] = &auth.Actor{ID: "usr_admin", GitHubLogin: "admin", Kind: "human", Role: "member"}
+	setFakeGroupMember(repo, "usr_owner", "conv-consent", ownerRole, true)
+	setFakeGroupMember(repo, "usr_admin", "conv-consent", "admin", true)
+	now := time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
+	var sequence atomic.Int64
+	service := testService(repo, &now, &sequence)
+	bot, err := service.Create(context.Background(), CreateInput{ActorID: "usr_owner", SpaceID: testSpaceID, Name: "Consent Bot"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	allowGroup := true
+	visibility := VisibilitySpaceMembers
+	if _, err := service.UpdateSettings(context.Background(), UpdateSettingsInput{ActorID: "usr_owner", SpaceID: testSpaceID, BotID: bot.ID, AllowGroup: &allowGroup, VisibilityPolicy: &visibility}); err != nil {
+		t.Fatal(err)
+	}
+	// fakeState.members represents conversation membership for these focused
+	// tests; CreateBot seeds the Bot's space membership separately.
+	repo.state.members[bot.BotUserID] = false
+	return repo, service, bot
+}
+
+func fakeGroupGrant(repo *fakeRepository, botID, conversationID string) *ContextGrantRecord {
+	for _, grant := range repo.state.grants {
+		if grant.BotID == botID && grant.ConversationID == conversationID {
+			value := cloneGrant(grant)
+			return &value
+		}
+	}
+	return nil
 }
 
 func testTokenFactory(values ...string) TokenFactory {
@@ -928,6 +994,187 @@ func TestBotSettingsAndConversationGrants(t *testing.T) {
 	encoded, err := json.Marshal(settings)
 	if err != nil || !strings.Contains(string(encoded), `"allowedMemberIds":[]`) || !strings.Contains(string(encoded), `"updatedAt":"2026-09-04T12:00:00.000Z"`) {
 		t.Fatalf("settings JSON = %s, %v", encoded, err)
+	}
+}
+
+func TestUpdateGroupPolicyOwnerMemberCreatesPendingConsent(t *testing.T) {
+	repo, service, bot := newGroupPolicyFixture(t, "member")
+	policy, err := service.UpdateGroupPolicy(context.Background(), UpdateGroupPolicyInput{
+		ActorID: "usr_owner", SpaceID: testSpaceID, BotID: bot.ID, ConversationID: "conv-consent",
+		AllowTrigger: boolPtr(true), AllowContext: boolPtr(true), MaxMessages: intPtr(24),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if policy.Status != "pending" || valueOrEmpty(policy.InvitedBy) != "usr_owner" || policy.ApprovedBy != nil || !policy.AllowTrigger || !policy.AllowContext {
+		t.Fatalf("owner request = %#v", policy)
+	}
+	if repo.state.members[bot.BotUserID] {
+		t.Fatal("pending owner request must not add the Bot to the group")
+	}
+	grant := fakeGroupGrant(repo, bot.ID, "conv-consent")
+	if grant == nil || !grant.AllowTrigger || !grant.AllowContext || grant.MaxMessages == nil || *grant.MaxMessages != 24 || valueOrEmpty(grant.GrantedBy) != "usr_owner" {
+		t.Fatalf("pending grant intent = %#v", grant)
+	}
+}
+
+func TestUpdateGroupPolicyGroupAdminNeedsOwnerRequestAndCannotWiden(t *testing.T) {
+	repo, service, bot := newGroupPolicyFixture(t, "member")
+	if _, err := service.UpdateGroupPolicy(context.Background(), UpdateGroupPolicyInput{
+		ActorID: "usr_admin", SpaceID: testSpaceID, BotID: bot.ID, ConversationID: "conv-consent", Status: "active",
+	}); domainCode(err) != CodeBotGroupPolicyForbidden {
+		t.Fatalf("admin direct activation error = %v", err)
+	}
+	if len(repo.state.groups[bot.ID]) != 0 || repo.state.members[bot.BotUserID] {
+		t.Fatalf("admin direct activation changed state: groups=%#v members=%v", repo.state.groups[bot.ID], repo.state.members[bot.BotUserID])
+	}
+	if _, err := service.UpdateGroupPolicy(context.Background(), UpdateGroupPolicyInput{
+		ActorID: "usr_owner", SpaceID: testSpaceID, BotID: bot.ID, ConversationID: "conv-consent", AllowContext: boolPtr(false),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.UpdateGroupPolicy(context.Background(), UpdateGroupPolicyInput{
+		ActorID: "usr_admin", SpaceID: testSpaceID, BotID: bot.ID, ConversationID: "conv-consent", Status: "active", AllowContext: boolPtr(true),
+	}); domainCode(err) != CodeBotGroupPolicyForbidden {
+		t.Fatalf("admin context widening error = %v", err)
+	}
+	if repo.state.members[bot.BotUserID] {
+		t.Fatal("rejected widening must not add the Bot to the group")
+	}
+}
+
+func TestUpdateGroupPolicyAdminApprovesAndRevokesOwnerConsent(t *testing.T) {
+	repo, service, bot := newGroupPolicyFixture(t, "member")
+	pending, err := service.UpdateGroupPolicy(context.Background(), UpdateGroupPolicyInput{
+		ActorID: "usr_owner", SpaceID: testSpaceID, BotID: bot.ID, ConversationID: "conv-consent",
+		AllowTrigger: boolPtr(true), AllowContext: boolPtr(true), MaxMessages: intPtr(20),
+	})
+	if err != nil || pending.Status != "pending" {
+		t.Fatalf("pending = %#v, %v", pending, err)
+	}
+	active, err := service.UpdateGroupPolicy(context.Background(), UpdateGroupPolicyInput{
+		ActorID: "usr_admin", SpaceID: testSpaceID, BotID: bot.ID, ConversationID: "conv-consent", Status: "active",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if active.Status != "active" || valueOrEmpty(active.InvitedBy) != "usr_owner" || valueOrEmpty(active.ApprovedBy) != "usr_admin" || !repo.state.members[bot.BotUserID] {
+		t.Fatalf("approved policy = %#v, member=%v", active, repo.state.members[bot.BotUserID])
+	}
+	grant := fakeGroupGrant(repo, bot.ID, "conv-consent")
+	if grant == nil || valueOrEmpty(grant.GrantedBy) != "usr_owner" || !grant.AllowContext || grant.MaxMessages == nil || *grant.MaxMessages != 20 {
+		t.Fatalf("approved grant = %#v", grant)
+	}
+	revoked, err := service.UpdateGroupPolicy(context.Background(), UpdateGroupPolicyInput{
+		ActorID: "usr_admin", SpaceID: testSpaceID, BotID: bot.ID, ConversationID: "conv-consent", Status: "removed",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if revoked.Status != "removed" || revoked.ApprovedBy != nil || repo.state.members[bot.BotUserID] {
+		t.Fatalf("revoked policy = %#v, member=%v", revoked, repo.state.members[bot.BotUserID])
+	}
+	grant = fakeGroupGrant(repo, bot.ID, "conv-consent")
+	if grant == nil || grant.AllowTrigger || grant.AllowContext {
+		t.Fatalf("revoked grant = %#v", grant)
+	}
+	if _, err := service.UpdateGroupPolicy(context.Background(), UpdateGroupPolicyInput{
+		ActorID: "usr_admin", SpaceID: testSpaceID, BotID: bot.ID, ConversationID: "conv-consent", Status: "active",
+	}); domainCode(err) != CodeBotGroupPolicyForbidden {
+		t.Fatalf("admin reactivation without a new owner request error = %v", err)
+	}
+	pending, err = service.UpdateGroupPolicy(context.Background(), UpdateGroupPolicyInput{
+		ActorID: "usr_owner", SpaceID: testSpaceID, BotID: bot.ID, ConversationID: "conv-consent", AllowTrigger: boolPtr(true),
+	})
+	if err != nil || pending.Status != "pending" || repo.state.members[bot.BotUserID] {
+		t.Fatalf("renewed owner request = %#v, member=%v, %v", pending, repo.state.members[bot.BotUserID], err)
+	}
+}
+
+func TestUpdateGroupPolicyOwnerManagerActivatesInOneStep(t *testing.T) {
+	repo, service, bot := newGroupPolicyFixture(t, "admin")
+	policy, err := service.UpdateGroupPolicy(context.Background(), UpdateGroupPolicyInput{
+		ActorID: "usr_owner", SpaceID: testSpaceID, BotID: bot.ID, ConversationID: "conv-consent", AllowContext: boolPtr(true),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if policy.Status != "active" || valueOrEmpty(policy.InvitedBy) != "usr_owner" || valueOrEmpty(policy.ApprovedBy) != "usr_owner" || !repo.state.members[bot.BotUserID] {
+		t.Fatalf("owner-manager policy = %#v, member=%v", policy, repo.state.members[bot.BotUserID])
+	}
+}
+
+func TestV2AccessPolicyKeepsDirectPrivateAndAllowsApprovedHumanGroup(t *testing.T) {
+	repo := newFakeRepository()
+	repo.state.groupMembers["conv-group"] = GroupConversationRecord{ID: "conv-group", Type: "group", IsMember: true, Role: "admin"}
+	now := time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
+	var sequence atomic.Int64
+	service := testService(repo, &now, &sequence)
+	bot, err := service.Create(context.Background(), CreateInput{ActorID: "usr_owner", SpaceID: testSpaceID, Name: "Private Group Bot"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyVisibility := VisibilitySpaceMembers
+	legacyMembers := []string{"usr_member"}
+	legacy, err := service.UpdateSettings(context.Background(), UpdateSettingsInput{ActorID: "usr_owner", SpaceID: testSpaceID, BotID: bot.ID, VisibilityPolicy: &legacyVisibility, AllowedMemberIDs: &legacyMembers})
+	if err != nil || legacy.VisibilityPolicy != VisibilitySpaceMembers || len(legacy.AllowedMemberIDs) != 1 {
+		t.Fatalf("legacy public baseline = %#v, %v", legacy, err)
+	}
+	allowGroup := true
+	policy := botpolicy.Policy{Version: botpolicy.Version,
+		Discovery: botpolicy.DiscoveryPolicy{Audience: botpolicy.AudienceOwnerOnly},
+		Direct:    botpolicy.DirectPolicy{Audience: botpolicy.AudienceOwnerOnly},
+		Groups:    botpolicy.GroupPolicy{Audience: botpolicy.AudienceCurrentMembers},
+	}
+	settings, err := service.UpdateSettings(context.Background(), UpdateSettingsInput{ActorID: "usr_owner", SpaceID: testSpaceID, BotID: bot.ID, AllowGroup: &allowGroup, AccessPolicy: &policy})
+	if err != nil || settings.AccessPolicy == nil {
+		t.Fatalf("v2 settings = %#v, %v", settings, err)
+	}
+	if settings.VisibilityPolicy != VisibilityPrivate {
+		t.Fatalf("V2 policy must mirror conservative legacy visibility: %q", settings.VisibilityPolicy)
+	}
+	if len(settings.AllowedMemberIDs) != 0 {
+		t.Fatalf("V2 policy must clear legacy visibility members: %#v", settings.AllowedMemberIDs)
+	}
+	group, err := service.UpdateGroupPolicy(context.Background(), UpdateGroupPolicyInput{ActorID: "usr_owner", SpaceID: testSpaceID, BotID: bot.ID, ConversationID: "conv-group", AllowTrigger: boolPtr(true)})
+	if err != nil || group.Status != "active" {
+		t.Fatalf("V2 group activation = %#v, %v", group, err)
+	}
+	if _, err := service.UpdateSettings(context.Background(), UpdateSettingsInput{ActorID: "usr_owner", SpaceID: testSpaceID, BotID: bot.ID, AllowGroup: boolPtr(false)}); domainCode(err) != CodeBotInvalidSettings {
+		t.Fatalf("legacy permission update with V2 policy should be rejected: %v", err)
+	}
+	// V2 does not make the independent legacy settings immutable.  A current
+	// UI request carries the policy as well as those fields, and must be able to
+	// update them atomically.
+	allowGroup = false
+	groupInviterPolicy := "group_admin"
+	requireOwnerApproval := true
+	updated, err := service.UpdateSettings(context.Background(), UpdateSettingsInput{
+		ActorID:              "usr_owner",
+		SpaceID:              testSpaceID,
+		BotID:                bot.ID,
+		AccessPolicy:         &policy,
+		AllowGroup:           &allowGroup,
+		GroupInviterPolicy:   &groupInviterPolicy,
+		RequireOwnerApproval: &requireOwnerApproval,
+	})
+	if err != nil {
+		t.Fatalf("same-policy independent settings update = %#v, %v", updated, err)
+	}
+	if updated.AccessPolicy == nil || updated.AllowGroup || updated.GroupInviterPolicy != groupInviterPolicy || !updated.RequireOwnerApproval {
+		t.Fatalf("same-policy independent settings not applied = %#v", updated)
+	}
+	cleared, err := service.UpdateSettings(context.Background(), UpdateSettingsInput{
+		ActorID: "usr_owner",
+		SpaceID: testSpaceID,
+		BotID:   bot.ID,
+		Patch:   map[string]any{"accessPolicy": nil},
+	})
+	if err != nil {
+		t.Fatalf("clear V2 policy = %#v, %v", cleared, err)
+	}
+	if cleared.AccessPolicy != nil || cleared.VisibilityPolicy != VisibilityPrivate || len(cleared.AllowedMemberIDs) != 0 {
+		t.Fatalf("clearing V2 policy must retain conservative legacy fields = %#v", cleared)
 	}
 }
 

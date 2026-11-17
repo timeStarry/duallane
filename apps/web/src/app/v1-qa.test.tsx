@@ -31,7 +31,7 @@ import {
 import { AppV1 } from "@/app/AppV1";
 import { WorkbenchV1 } from "@/app/WorkbenchV1";
 import { applyVibrancyTokensToRoot } from "@/shared/theme/vibrancy";
-import { BotSettingsPanel } from "@/widgets/BotSettingsPanel";
+import { BotSettingsPanel, buildPairingPrompt } from "@/widgets/BotSettingsPanel";
 import { DualLaneCardKit } from "@/widgets/DualLaneCardKit";
 import { EmoteStudioPanel } from "@/widgets/EmoteSystem";
 import { resolveOrderedPickerTabKeys, useEmoteStore } from "@/entities/emote/store";
@@ -1599,6 +1599,14 @@ describe("DualLane v1.0 QA Acceptance Suite", () => {
 
   it("supports universal AI Agent setup deep-links (?setup=setup_...) and BotSettingsPanel pairing UI", async () => {
     const setupId = "setup_0123456789abcdef0123456789abcdef";
+    const prompt = buildPairingPrompt("测试助手", "https://workspace.example", setupId);
+    expect(prompt).toContain("https://workspace.example/integrations/duallane-agent/SKILL.md");
+    expect(prompt).toContain("https://workspace.example/integrations/duallane-agent.manifest.json");
+    expect(prompt).toContain(`https://workspace.example/workspace?setup=${setupId}`);
+    expect(prompt).toContain("--cmd <可信桥接命令>");
+    expect(prompt).toContain("复用已有 profile");
+    expect(prompt).not.toContain("--agent auto");
+    expect(prompt).not.toContain("curl -fsSL");
     expect(extractBotSetupIdFromLocation({ search: `?setup=${setupId}` })).toBe(setupId);
     expect(extractBotSetupIdFromLocation({ search: "?setup=invalid" })).toBe("");
     expect(inferEntryViewFromLocation({ pathname: "/", search: `?setup=${setupId}` })).toBe(

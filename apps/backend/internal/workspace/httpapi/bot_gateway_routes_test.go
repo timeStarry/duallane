@@ -14,6 +14,7 @@ import (
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/botgateway"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/bots"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/gate"
+	sdkgate "github.com/timestarry/duallane/apps/backend/internal/workspace/sdkgate"
 )
 
 type botGatewayRouteFake struct {
@@ -168,6 +169,7 @@ func gatewayJSONRequest(method, target string, body string) *http.Request {
 		request.Header.Set("Content-Type", "application/json")
 	}
 	request.Header.Set("Authorization", testGatewayAuthorization)
+	request.Header.Set(sdkgate.SDKVersionHeader, sdkgate.MinimumSDKVersion)
 	request.Header.Set("X-Request-ID", "req_gateway")
 	request.Header.Set("User-Agent", "gateway-test/1")
 	request.RemoteAddr = "192.0.2.10:1234"
@@ -260,6 +262,37 @@ func TestBotGatewayRoutesAuthenticateAndForwardRESTRequests(t *testing.T) {
 	}
 }
 
+func TestBotGatewayCredentialRoutesRequireCurrentSDK(t *testing.T) {
+	for _, version := range []string{"", "1.1.9", "not-a-version", "2.0.0"} {
+		t.Run("version-"+strings.ReplaceAll(version, ".", "_"), func(t *testing.T) {
+			gateway := &botGatewayRouteFake{}
+			setup := &botGatewaySetupRouteFake{}
+			router := newBotGatewayRouteTestRouter(gateway, setup, true)
+			request := gatewayJSONRequest(http.MethodGet, "/api/bot-gateway/v1/me", "")
+			request.Header.Set(sdkgate.SDKVersionHeader, version)
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, request)
+			if response.Code != http.StatusUpgradeRequired {
+				t.Fatalf("status = %d, want %d; body=%s", response.Code, http.StatusUpgradeRequired, response.Body.String())
+			}
+			body := gatewayResponseJSON(t, response)
+			errBody, ok := body["error"].(map[string]any)
+			if !ok || errBody["code"] != sdkgate.UpgradeRequiredCode || errBody["minimumSdkVersion"] != sdkgate.MinimumSDKVersion || errBody["latestSdkVersion"] != sdkgate.LatestSDKVersion || errBody["runtimeManifestUrl"] != sdkgate.RuntimeManifestURL || errBody["docsUrl"] != sdkgate.DocsURL || errBody["skillUrl"] != sdkgate.SkillURL {
+				t.Fatalf("upgrade response = %#v", body)
+			}
+		})
+	}
+
+	setup := &botGatewaySetupRouteFake{}
+	router := newBotGatewayRouteTestRouter(nil, setup, true)
+	request := httptest.NewRequest(http.MethodGet, "/api/bot-gateway/v1/setup/status?setupSessionId=setup_1234567890123456", nil)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusUpgradeRequired || setup.statusInput.SetupID != "" {
+		t.Fatalf("setup without SDK declaration reached service: status=%d body=%s input=%#v", response.Code, response.Body.String(), setup.statusInput)
+	}
+}
+
 func TestBotGatewaySetupRoutesValidateAndExposeRawTokenOnlyOnExchange(t *testing.T) {
 	setup := &botGatewaySetupRouteFake{
 		setupSession: bots.SetupSession{ID: "setup_1234567890123456", Status: "awaiting_user"},
@@ -304,6 +337,7 @@ func TestBotGatewaySetupRoutesRejectUnknownFieldsBeforeService(t *testing.T) {
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/api/bot-gateway/v1/setup/request", strings.NewReader(`{"setupSessionId":"setup_1234567890123456","actorId":"caller-forbidden"}`))
 	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set(sdkgate.SDKVersionHeader, sdkgate.MinimumSDKVersion)
 	router.ServeHTTP(response, request)
 
 	if response.Code != http.StatusBadRequest {
@@ -325,6 +359,7 @@ func TestBotGatewayExchangeFailsClosedWithoutRawToken(t *testing.T) {
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/api/bot-gateway/v1/setup/exchange", strings.NewReader(`{"setupSessionId":"setup_1234567890123456"}`))
 	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set(sdkgate.SDKVersionHeader, sdkgate.MinimumSDKVersion)
 	router.ServeHTTP(response, request)
 
 	if response.Code != http.StatusInternalServerError {
@@ -342,6 +377,7 @@ func TestBotGatewayRoutesUseDefaultSpaceWithoutResolver(t *testing.T) {
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/api/bot-gateway/v1/me", nil)
 	request.Header.Set("Authorization", testGatewayAuthorization)
+	request.Header.Set(sdkgate.SDKVersionHeader, sdkgate.MinimumSDKVersion)
 	router.ServeHTTP(response, request)
 	if response.Code != http.StatusOK || gateway.spaceID != auth.DefaultSpaceID {
 		t.Fatalf("default space mismatch: status=%d space=%q", response.Code, gateway.spaceID)

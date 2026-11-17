@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/auth"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/botaccess"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/botpolicy"
 )
 
 type fakeState struct {
@@ -354,6 +356,117 @@ func TestListProjectionAndDiscoverableSearch(t *testing.T) {
 	if !strings.Contains(wire, `"joinedAt":"2026-09-04T04:34:56.789Z"`) {
 		t.Fatalf("joinedAt is not UTC milliseconds: %s", wire)
 	}
+}
+
+func TestV2BotDiscoveryAndDirectProjectionIgnoreLegacyAdminBypass(t *testing.T) {
+	now := time.Date(2026, 9, 4, 12, 34, 56, 0, time.UTC)
+	admin := auth.Actor{ID: "usr_admin", GitHubLogin: "admin", DisplayName: "Admin", Kind: "human", Role: RoleAdmin, JoinedAt: now}
+	bot := auth.Actor{ID: "bot-user", DisplayName: "Private Bot", Kind: "bot", Role: RoleMember, JoinedAt: now}
+	repo := newFakeRepository(now, admin, bot)
+	policy := botpolicy.Policy{
+		Version:   botpolicy.Version,
+		Discovery: botpolicy.DiscoveryPolicy{Audience: botpolicy.AudienceOwnerOnly},
+		Direct:    botpolicy.DirectPolicy{Audience: botpolicy.AudienceOwnerOnly},
+		Groups:    botpolicy.GroupPolicy{Audience: botpolicy.AudienceOwnerOnly},
+	}
+	access, err := botaccess.NewRecord("bot-1", DefaultSpaceID, "usr_owner", bot.ID, "active", "space_members", true, true, policyJSONForTest(t, policy))
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo.state.members[bot.ID] = MemberRecord{ID: bot.ID, DisplayName: bot.DisplayName, Kind: "bot", Role: RoleMember, JoinedAt: now, NormallyVisible: true, BotAccess: &access}
+	service := testService(repo, now)
+	items, err := service.List(context.Background(), ListInput{ActorID: admin.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range items {
+		if item.ID == bot.ID {
+			t.Fatalf("V2 owner-only bot leaked to administrator: %#v", item)
+		}
+	}
+	if access.DirectAllows(admin.ID, true, true) {
+		t.Fatal("V2 owner-only bot unexpectedly grants admin direct access")
+	}
+}
+
+func TestBotIDProjectionOnlyExposesVisibleCustomAgentBots(t *testing.T) {
+	now := time.Date(2026, 9, 4, 12, 34, 56, 0, time.UTC)
+	owner := auth.Actor{ID: "usr_owner", GitHubLogin: "owner", DisplayName: "Owner", Kind: "human", Role: RoleOwner, JoinedAt: now}
+	viewer := auth.Actor{ID: "usr_viewer", GitHubLogin: "viewer", DisplayName: "Viewer", Kind: "human", Role: RoleMember, JoinedAt: now}
+	bot := auth.Actor{ID: "bot-user", DisplayName: "Custom Bot", Kind: "bot", Role: RoleMember, JoinedAt: now}
+	beacon := auth.Actor{ID: BeaconUserID, DisplayName: "信标", Kind: "bot", Role: RoleMember, JoinedAt: now}
+	echo := auth.Actor{ID: EchoUserID, DisplayName: "回声", Kind: "bot", Role: RoleMember, JoinedAt: now}
+	repo := newFakeRepository(now, owner, viewer, bot, beacon, echo)
+	policy := botpolicy.Policy{
+		Version:   botpolicy.Version,
+		Discovery: botpolicy.DiscoveryPolicy{Audience: botpolicy.AudienceOwnerOnly},
+		Direct:    botpolicy.DirectPolicy{Audience: botpolicy.AudienceOwnerOnly},
+		Groups:    botpolicy.GroupPolicy{Audience: botpolicy.AudienceOwnerOnly},
+	}
+	access, err := botaccess.NewRecord("agent-record-42", DefaultSpaceID, owner.ID, bot.ID, "active", "private", true, true, policyJSONForTest(t, policy))
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo.state.members[bot.ID] = MemberRecord{ID: bot.ID, DisplayName: bot.DisplayName, Kind: "bot", Role: RoleMember, JoinedAt: now, NormallyVisible: true, BotAccess: &access}
+	repo.state.members[BeaconUserID] = MemberRecord{ID: BeaconUserID, DisplayName: "信标", Kind: "bot", Role: RoleMember, JoinedAt: now, NormallyVisible: true}
+	repo.state.members[EchoUserID] = MemberRecord{ID: EchoUserID, DisplayName: "回声", Kind: "bot", Role: RoleMember, JoinedAt: now, NormallyVisible: true}
+	service := testService(repo, now)
+
+	ownerItems, err := service.List(context.Background(), ListInput{ActorID: owner.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID := make(map[string]Member, len(ownerItems))
+	for _, item := range ownerItems {
+		byID[item.ID] = item
+	}
+	custom, ok := byID[bot.ID]
+	if !ok || custom.BotID != "agent-record-42" {
+		t.Fatalf("visible custom bot projection = %#v, want botId agent-record-42", custom)
+	}
+	encoded, err := json.Marshal(custom)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(encoded), `"botId":"agent-record-42"`) {
+		t.Fatalf("visible custom bot omitted botId: %s", encoded)
+	}
+	for _, systemID := range []string{BeaconUserID, EchoUserID} {
+		item, ok := byID[systemID]
+		if !ok || item.BotID != "" {
+			t.Fatalf("system bot projection = %#v, want no botId", item)
+		}
+		encoded, err := json.Marshal(item)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(encoded), `"botId"`) {
+			t.Fatalf("system bot leaked botId: %s", encoded)
+		}
+	}
+	human, ok := byID[owner.ID]
+	if !ok || human.BotID != "" {
+		t.Fatalf("human projection = %#v, want no botId", human)
+	}
+
+	viewerItems, err := service.List(context.Background(), ListInput{ActorID: viewer.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range viewerItems {
+		if item.ID == bot.ID {
+			t.Fatalf("private custom bot leaked to non-owner: %#v", item)
+		}
+	}
+}
+
+func policyJSONForTest(t *testing.T, policy botpolicy.Policy) []byte {
+	t.Helper()
+	value, err := json.Marshal(policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return value
 }
 
 func TestProfileRemarkAndVisibilityAudit(t *testing.T) {

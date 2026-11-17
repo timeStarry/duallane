@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/botgateway"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/files"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/messages"
+	sdkgate "github.com/timestarry/duallane/apps/backend/internal/workspace/sdkgate"
 )
 
 type stubRepo struct {
@@ -641,6 +643,7 @@ func TestBotGatewayV2ConversationsAndMessageEdit(t *testing.T) {
 	// 2. List bot conversations
 	listReq := httptest.NewRequest(http.MethodGet, "/api/bot/v2/conversations", nil)
 	listReq.Header.Set("Authorization", "Bearer "+validToken)
+	listReq.Header.Set(sdkgate.SDKVersionHeader, sdkgate.MinimumSDKVersion)
 	listRec := httptest.NewRecorder()
 	r.ServeHTTP(listRec, listReq)
 	if listRec.Code != http.StatusOK {
@@ -659,6 +662,7 @@ func TestBotGatewayV2ConversationsAndMessageEdit(t *testing.T) {
 	// 3. Edit bot message with messages:send scope
 	editReq := httptest.NewRequest(http.MethodPatch, "/api/bot/v2/messages/msg_stream_1", bytes.NewBufferString(`{"plainText":"已完成分析，结论如下"}`))
 	editReq.Header.Set("Authorization", "Bearer "+validToken)
+	editReq.Header.Set(sdkgate.SDKVersionHeader, sdkgate.MinimumSDKVersion)
 	editRec := httptest.NewRecorder()
 	r.ServeHTTP(editRec, editReq)
 	if editRec.Code != http.StatusOK {
@@ -682,6 +686,7 @@ func TestBotGatewayV2ConversationsAndMessageEdit(t *testing.T) {
 	readOnlyHandler.Mount(roRouter)
 	roReq := httptest.NewRequest(http.MethodPatch, "/api/bot/v2/messages/msg_stream_1", bytes.NewBufferString(`{"plainText":"denied"}`))
 	roReq.Header.Set("Authorization", "Bearer "+validToken)
+	roReq.Header.Set(sdkgate.SDKVersionHeader, sdkgate.MinimumSDKVersion)
 	roRec := httptest.NewRecorder()
 	roRouter.ServeHTTP(roRec, roReq)
 	if roRec.Code != http.StatusForbidden {
@@ -691,6 +696,7 @@ func TestBotGatewayV2ConversationsAndMessageEdit(t *testing.T) {
 	// 5. Bot typing & self-unbind endpoints
 	typingReq := httptest.NewRequest(http.MethodPost, "/api/bot/v2/typing", bytes.NewBufferString(`{"conversationId":"conv_dm_bot_1","state":"thinking"}`))
 	typingReq.Header.Set("Authorization", "Bearer "+validToken)
+	typingReq.Header.Set(sdkgate.SDKVersionHeader, sdkgate.MinimumSDKVersion)
 	typingRec := httptest.NewRecorder()
 	r.ServeHTTP(typingRec, typingReq)
 	if typingRec.Code != http.StatusOK || repo.typingConvID != "conv_dm_bot_1" || repo.typingKind != "bot" || repo.typingState != "thinking" {
@@ -699,10 +705,42 @@ func TestBotGatewayV2ConversationsAndMessageEdit(t *testing.T) {
 
 	unbindReq := httptest.NewRequest(http.MethodPost, "/api/bot/v2/unbind", nil)
 	unbindReq.Header.Set("Authorization", "Bearer "+validToken)
+	unbindReq.Header.Set(sdkgate.SDKVersionHeader, sdkgate.MinimumSDKVersion)
 	unbindRec := httptest.NewRecorder()
 	r.ServeHTTP(unbindRec, unbindReq)
 	if unbindRec.Code != http.StatusOK || repo.unboundTokenID != "btk_1" {
 		t.Fatalf("expected 200 on /api/bot/v2/unbind, got %d token=%q", unbindRec.Code, repo.unboundTokenID)
+	}
+}
+
+func TestBotV2CredentialRoutesRejectUnsupportedSDKBeforeBusinessWork(t *testing.T) {
+	validToken := "dl_bot_0123456789abcdef0123456789abcdef"
+	h := NewHTTPHandler(NewService(&stubRepo{}), stubActorResolver{}).WithBotAuthenticator(stubBotAuthenticator{
+		auth: &botgateway.Auth{BotID: "bot_agent_1", UserID: "usr_bot_agent_1", SpaceID: auth.DefaultSpaceID},
+	})
+	r := chi.NewRouter()
+	h.Mount(r)
+	for _, version := range []string{"", "1.1.9", "invalid", "2.0.0"} {
+		t.Run("version-"+strings.ReplaceAll(version, ".", "_"), func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodGet, "/api/bot/v2/doctor", nil)
+			request.Header.Set("Authorization", "Bearer "+validToken)
+			if version != "" {
+				request.Header.Set(sdkgate.SDKVersionHeader, version)
+			}
+			response := httptest.NewRecorder()
+			r.ServeHTTP(response, request)
+			if response.Code != http.StatusUpgradeRequired {
+				t.Fatalf("status = %d, want %d; body=%s", response.Code, http.StatusUpgradeRequired, response.Body.String())
+			}
+			var body map[string]any
+			if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+				t.Fatal(err)
+			}
+			errBody, ok := body["error"].(map[string]any)
+			if !ok || errBody["code"] != sdkgate.UpgradeRequiredCode || errBody["minimumSdkVersion"] != sdkgate.MinimumSDKVersion || errBody["latestSdkVersion"] != sdkgate.LatestSDKVersion || errBody["docsUrl"] != sdkgate.DocsURL || errBody["skillUrl"] != sdkgate.SkillURL {
+				t.Fatalf("upgrade response = %#v", body)
+			}
+		})
 	}
 }
 
@@ -1150,6 +1188,7 @@ func TestMobileReleaseDistributionEndpoints(t *testing.T) {
 
 	deniedBotReq := httptest.NewRequest(http.MethodPut, "/api/bot/v2/mobile-release/apk", bytes.NewReader(apkBytes))
 	deniedBotReq.Header.Set("Authorization", "Bearer "+memberTok)
+	deniedBotReq.Header.Set(sdkgate.SDKVersionHeader, sdkgate.MinimumSDKVersion)
 	deniedBotRec := httptest.NewRecorder()
 	botRouter.ServeHTTP(deniedBotRec, deniedBotReq)
 	if deniedBotRec.Code != http.StatusForbidden {
@@ -1159,6 +1198,7 @@ func TestMobileReleaseDistributionEndpoints(t *testing.T) {
 	apk108 := buildSyntheticDualLaneAPK(t, "1.0.8", 10008)
 	ownerBotUpReq := httptest.NewRequest(http.MethodPut, "/api/bot/v2/mobile-release/apk", bytes.NewReader(apk108))
 	ownerBotUpReq.Header.Set("Authorization", "Bearer "+ownerTok)
+	ownerBotUpReq.Header.Set(sdkgate.SDKVersionHeader, sdkgate.MinimumSDKVersion)
 	ownerBotUpRec := httptest.NewRecorder()
 	botRouter.ServeHTTP(ownerBotUpRec, ownerBotUpReq)
 	if ownerBotUpRec.Code != http.StatusOK || repo.mobileRelease.Version != "1.0.8" {
@@ -1177,6 +1217,7 @@ func TestMobileReleaseDistributionEndpoints(t *testing.T) {
 
 	badOtaReq := httptest.NewRequest(http.MethodPut, "/api/bot/v2/mobile-release/ota?version=1.0.9", bytes.NewReader(evilBuf.Bytes()))
 	badOtaReq.Header.Set("Authorization", "Bearer "+ownerTok)
+	badOtaReq.Header.Set(sdkgate.SDKVersionHeader, sdkgate.MinimumSDKVersion)
 	badOtaRec := httptest.NewRecorder()
 	botRouter.ServeHTTP(badOtaRec, badOtaReq)
 	if badOtaRec.Code != http.StatusBadRequest {
@@ -1193,6 +1234,7 @@ func TestMobileReleaseDistributionEndpoints(t *testing.T) {
 
 	goodOtaReq := httptest.NewRequest(http.MethodPut, "/api/bot/v2/mobile-release/ota?version=1.0.9&minNativeVersionCode=10008", bytes.NewReader(goodOtaBuf.Bytes()))
 	goodOtaReq.Header.Set("Authorization", "Bearer "+ownerTok)
+	goodOtaReq.Header.Set(sdkgate.SDKVersionHeader, sdkgate.MinimumSDKVersion)
 	goodOtaRec := httptest.NewRecorder()
 	botRouter.ServeHTTP(goodOtaRec, goodOtaReq)
 	if goodOtaRec.Code != http.StatusOK || repo.mobileRelease.Version != "1.0.9" || repo.mobileRelease.OTA == nil {
@@ -1322,6 +1364,7 @@ func TestBotFileUploadAndSendEndpoints(t *testing.T) {
 	// 1. Reject unauthorized conversation
 	forbidReq := httptest.NewRequest(http.MethodPost, "/api/bot/v2/conversations/conv_unauthorized/files?fileName=report.md", bytes.NewBufferString("# Report"))
 	forbidReq.Header.Set("Authorization", "Bearer "+validTok)
+	forbidReq.Header.Set(sdkgate.SDKVersionHeader, sdkgate.MinimumSDKVersion)
 	forbidRec := httptest.NewRecorder()
 	r.ServeHTTP(forbidRec, forbidReq)
 	if forbidRec.Code != http.StatusForbidden {
@@ -1335,6 +1378,7 @@ func TestBotFileUploadAndSendEndpoints(t *testing.T) {
 		bytes.NewBufferString("# Weekly Summary\nAll green."),
 	)
 	sendReq.Header.Set("Authorization", "Bearer "+validTok)
+	sendReq.Header.Set(sdkgate.SDKVersionHeader, sdkgate.MinimumSDKVersion)
 	sendReq.Header.Set("Content-Type", "application/octet-stream")
 	sendRec := httptest.NewRecorder()
 	r.ServeHTTP(sendRec, sendReq)
@@ -1357,6 +1401,7 @@ func TestBotFileUploadAndSendEndpoints(t *testing.T) {
 	// 3. Two-step PUT /api/bot/v2/uploads/{uploadId}/content also succeeds
 	putReq := httptest.NewRequest(http.MethodPut, "/api/bot/v2/uploads/upl_bot_test_1/content", bytes.NewBufferString("raw-binary-content"))
 	putReq.Header.Set("Authorization", "Bearer "+validTok)
+	putReq.Header.Set(sdkgate.SDKVersionHeader, sdkgate.MinimumSDKVersion)
 	putRec := httptest.NewRecorder()
 	r.ServeHTTP(putRec, putReq)
 	if putRec.Code != http.StatusOK || string(botFiles.completedBytes) != "raw-binary-content" {
@@ -1402,6 +1447,7 @@ func TestBotConsoleOverviewUpgradeAndDoctorEndpoints(t *testing.T) {
 
 	docReq := httptest.NewRequest(http.MethodGet, "/api/bot/v2/doctor", nil)
 	docReq.Header.Set("Authorization", "Bearer "+validTok)
+	docReq.Header.Set(sdkgate.SDKVersionHeader, sdkgate.MinimumSDKVersion)
 	docRec := httptest.NewRecorder()
 	r.ServeHTTP(docRec, docReq)
 	if docRec.Code != http.StatusOK {

@@ -20,6 +20,7 @@ import (
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/email"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/files"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/messages"
+	sdkgate "github.com/timestarry/duallane/apps/backend/internal/workspace/sdkgate"
 )
 
 const MaxBotFileUploadBytes int64 = 50 * 1024 * 1024
@@ -86,6 +87,14 @@ func (h *HTTPHandler) WithBotFilePipeline(botFiles BotFileUploader, botMessages 
 
 func (h *HTTPHandler) Mount(r chi.Router) {
 	r.Get("/api/bot/v2/conversations", h.handleBotListConversations)
+	r.Get("/api/bot/v2/capabilities", h.handleAgentCapabilities)
+	r.Post("/api/bot/v2/tasks", h.handleCreateAgentTask)
+	r.Get("/api/bot/v2/tasks/{taskId}", h.handleGetAgentTask)
+	r.Delete("/api/bot/v2/tasks/{taskId}", h.handleGetAgentTask)
+	r.Get("/api/bot/v2/tasks/{taskId}/operations/{operation}/{key}", h.handleAgentOperation)
+	r.Get("/api/bot/v2/conversations/{conversationId}/messages", h.handleAgentHistory)
+	r.Get("/api/bot/v2/conversations/{conversationId}/members", h.handleAgentMembers)
+	r.Get("/api/bot/v2/messages/{messageId}", h.handleGetAgentMessage)
 	r.Get("/api/bot/v2/doctor", h.handleBotDoctor)
 	r.Patch("/api/bot/v2/messages/{messageId}", h.handleBotEditMessage)
 	r.Post("/api/bot/v2/conversations/{conversationId}/files", h.handleBotSendConversationFile)
@@ -131,6 +140,7 @@ func (h *HTTPHandler) Mount(r chi.Router) {
 			r.Patch("/messages/{messageId}", h.handleEditMessage)
 			r.Post("/messages/forward", h.handleForwardMessages)
 			r.Get("/conversations/{conversationId}/threads", h.handleListConversationThreads)
+			r.Get("/conversations/{conversationId}/bot-requests", h.handleGroupBotRequests)
 			r.Get("/messages/{messageId}/thread", h.handleGetThread)
 			r.Post("/messages/{messageId}/thread", h.handleReplyThread)
 			r.Get("/devices", h.handleListDevices)
@@ -781,6 +791,7 @@ func (h *HTTPHandler) handleAdminStorageCleanup(w http.ResponseWriter, r *http.R
 }
 
 func (h *HTTPHandler) authenticateBotRequest(w http.ResponseWriter, r *http.Request) (*botgateway.Auth, bool) {
+	*r = *r.WithContext(botgateway.WithAgentTaskID(r.Context(), r.Header.Get(botgateway.AgentTaskHeader)))
 	w.Header().Set("Cache-Control", "no-store")
 	if h.botAuth == nil {
 		writeJSONError(w, http.StatusServiceUnavailable, "v1.unavailable", "Bot 网关尚未就绪")
@@ -806,10 +817,22 @@ func (h *HTTPHandler) authenticateBotRequest(w http.ResponseWriter, r *http.Requ
 		writeJSONError(w, http.StatusUnauthorized, botgateway.CodeInvalidToken, botgateway.MessageInvalidToken)
 		return nil, false
 	}
+	if err := sdkgate.RequireHTTP(r); err != nil {
+		writeBotGatewayError(w, err)
+		return nil, false
+	}
+	if gateway, ok := h.botAuth.(*botgateway.Service); ok && !h.authorizeAgentHTTP(w, r, botAuth, gateway) {
+		return nil, false
+	}
 	return botAuth, true
 }
 
 func writeBotGatewayError(w http.ResponseWriter, err error) {
+	var sdkError sdkgate.UpgradeRequiredError
+	if errors.As(err, &sdkError) {
+		writeJSON(w, http.StatusUpgradeRequired, map[string]any{"error": sdkError.Public()})
+		return
+	}
 	var gwErr *botgateway.Error
 	if errors.As(err, &gwErr) && gwErr != nil {
 		status := gwErr.StatusCode
@@ -831,6 +854,23 @@ func (h *HTTPHandler) handleBotListConversations(w http.ResponseWriter, r *http.
 	if err != nil {
 		writeServiceError(w, err)
 		return
+	}
+	if id := botgateway.AgentTaskID(r.Context()); id != "" {
+		if gateway, ok := h.botAuth.(*botgateway.Service); ok {
+			info, taskErr := gateway.GetAgentTask(r.Context(), botAuth, id)
+			if taskErr != nil {
+				writeBotGatewayError(w, taskErr)
+				return
+			}
+			task := info["task"].(*botgateway.AgentTask)
+			filtered := items[:0]
+			for _, item := range items {
+				if item.ID == task.ConversationID {
+					filtered = append(filtered, item)
+				}
+			}
+			items = filtered
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"conversations":    items,
@@ -883,13 +923,24 @@ func (h *HTTPHandler) handleBotEditMessage(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	var body struct {
-		PlainText string `json:"plainText"`
+		PlainText       string `json:"plainText"`
+		Content         any    `json:"content"`
+		ExpectedVersion string `json:"expectedVersion"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSONError(w, http.StatusBadRequest, botgateway.CodeInvalidRequest, "请求参数无效")
 		return
 	}
 	messageID := chi.URLParam(r, "messageId")
+	if gateway, ok := h.botAuth.(*botgateway.Service); ok && botgateway.AgentTaskID(r.Context()) != "" {
+		result, err := gateway.EditAgentMessage(r.Context(), botAuth, messageID, botgateway.AgentEditInput{Text: body.PlainText, Content: body.Content, ExpectedVersion: body.ExpectedVersion})
+		if err != nil {
+			writeBotGatewayError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, result)
+		return
+	}
 	if err := h.service.EditMessage(r.Context(), botAuth.UserID, messageID, body.PlainText); err != nil {
 		writeServiceError(w, err)
 		return
@@ -954,6 +1005,11 @@ func inferBotUploadMIMEType(rawHeader, rawQuery, fileName string) string {
 }
 
 func writeBotDomainError(w http.ResponseWriter, err error) {
+	var taskError *botgateway.Error
+	if errors.As(err, &taskError) {
+		writeBotGatewayError(w, taskError)
+		return
+	}
 	var fileErr *files.Error
 	if errors.As(err, &fileErr) && fileErr != nil {
 		status := fileErr.StatusCode
@@ -999,10 +1055,11 @@ func (h *HTTPHandler) handleBotCompleteUploadContent(w http.ResponseWriter, r *h
 		return
 	}
 	completed, err := h.botFiles.CompleteAgentBotUpload(r.Context(), files.CompleteUploadInput{
-		ActorID:  botAuth.UserID,
-		UploadID: uploadID,
-		Mode:     "single",
-		Content:  http.MaxBytesReader(w, r.Body, MaxBotFileUploadBytes),
+		FinalizeTransaction: h.agentFileFinalize(r, botAuth, uploadID),
+		ActorID:             botAuth.UserID,
+		UploadID:            uploadID,
+		Mode:                "single",
+		Content:             http.MaxBytesReader(w, r.Body, MaxBotFileUploadBytes),
 	})
 	if err != nil {
 		h.releaseBotUpload(r, botAuth.UserID, uploadID)
@@ -1089,6 +1146,12 @@ func (h *HTTPHandler) handleBotSendConversationFile(w http.ResponseWriter, r *ht
 		fileName,
 	)
 
+	if gateway, ok := h.botAuth.(*botgateway.Service); ok {
+		if err := gateway.ReserveAgentUploadBudget(r.Context(), botAuth, conversationID); err != nil {
+			writeBotGatewayError(w, err)
+			return
+		}
+	}
 	reserved, err := h.botFiles.ReserveAgentBotUpload(r.Context(), files.ReserveUploadInput{
 		ActorID:        botAuth.UserID,
 		FileName:       fileName,
@@ -1105,12 +1168,20 @@ func (h *HTTPHandler) handleBotSendConversationFile(w http.ResponseWriter, r *ht
 		writeJSONError(w, http.StatusTooManyRequests, "quota.insufficient", "今日空间文件传输配额不足")
 		return
 	}
+	if gateway, ok := h.botAuth.(*botgateway.Service); ok {
+		if err := gateway.BindAgentUpload(r.Context(), botAuth, reserved.Upload.ID, conversationID); err != nil {
+			h.releaseBotUpload(r, botAuth.UserID, reserved.Upload.ID)
+			writeBotGatewayError(w, err)
+			return
+		}
+	}
 
 	completed, err := h.botFiles.CompleteAgentBotUpload(r.Context(), files.CompleteUploadInput{
-		ActorID:  botAuth.UserID,
-		UploadID: reserved.Upload.ID,
-		Mode:     "single",
-		Content:  http.MaxBytesReader(w, r.Body, r.ContentLength+1),
+		FinalizeTransaction: h.agentFileFinalize(r, botAuth, reserved.Upload.ID),
+		ActorID:             botAuth.UserID,
+		UploadID:            reserved.Upload.ID,
+		Mode:                "single",
+		Content:             http.MaxBytesReader(w, r.Body, r.ContentLength+1),
 	})
 	if err != nil {
 		h.releaseBotUpload(r, botAuth.UserID, reserved.Upload.ID)
@@ -1152,6 +1223,19 @@ func (h *HTTPHandler) handleBotSendConversationFile(w http.ResponseWriter, r *ht
 		}
 	}
 
+	if gateway, ok := h.botAuth.(*botgateway.Service); ok && botgateway.AgentTaskID(r.Context()) != "" {
+		content := messages.Content{Format: messages.MessageContentFormat, PlainText: plainFallback, Blocks: blocks}
+		result, sendErr := gateway.SendMessage(r.Context(), botAuth, botgateway.SendMessageInput{
+			ConversationID: conversationID, ClientMessageID: clientMsgID, IdempotencyKey: clientMsgID,
+			ReplyToMessageID: replyToID, Content: content,
+		})
+		if sendErr != nil {
+			writeBotGatewayError(w, sendErr)
+			return
+		}
+		writeJSON(w, http.StatusCreated, map[string]any{"ok": true, "attachment": att, "message": result.Message})
+		return
+	}
 	createdMsg, err := h.botMessages.Create(r.Context(), messages.CreateInput{
 		ActorID:          botAuth.UserID,
 		ConversationID:   conversationID,
@@ -1199,6 +1283,12 @@ func (h *HTTPHandler) handleBotTyping(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.ConversationID) == "" {
 		writeJSONError(w, http.StatusBadRequest, botgateway.CodeInvalidRequest, "请求参数无效")
 		return
+	}
+	if gateway, ok := h.botAuth.(*botgateway.Service); ok {
+		if err := gateway.AuthorizeAgentOperation(r.Context(), botAuth, body.ConversationID); err != nil {
+			writeBotGatewayError(w, err)
+			return
+		}
 	}
 	expiresAt, err := h.service.SendConversationTyping(r.Context(), botAuth.UserID, body.ConversationID, "bot", body.State)
 	if err != nil {

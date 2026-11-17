@@ -264,6 +264,12 @@ func (s *Service) List(ctx context.Context, input ListInput) ([]Member, error) {
 	items := make([]Member, 0, len(records))
 	for _, record := range records {
 		normallyVisible := record.NormallyVisible || record.ID == actor.ID || actor.Role == RoleOwner || actor.Role == RoleAdmin
+		if record.BotAccess != nil {
+			// V2 discovery is authoritative for Agent Bots, including when the
+			// viewer is an administrator. The legacy visibility fact is passed
+			// only as the legacy-mode fallback input.
+			normallyVisible = record.BotAccess.DiscoveryAllows(actor.ID, true, record.NormallyVisible)
+		}
 		if !normallyVisible && !(discoveryEnabled && record.Kind == "human" && record.SearchDiscoverable &&
 			(strings.Contains(strings.ToLower(pointerValue(record.Nickname)), query) || strings.Contains(strings.ToLower(record.GitHubLogin), query))) {
 			continue
@@ -955,8 +961,34 @@ func projectMember(record MemberRecord, actor *auth.Actor) Member {
 		member.AvatarURL = sanitizeAvatarURL(record.AvatarURL)
 		member.Description = record.Description
 	}
-	member.Capabilities.CanStartDirectConversation = actor != nil && actor.ID != record.ID && canStartDirect(record) && hasCapability(actor.Role, CapabilityConversationDirect)
+	member.BotID = customAgentBotID(record)
+	member.Capabilities.CanStartDirectConversation = canStartDirectForActor(record, actor) && hasCapability(actor.Role, CapabilityConversationDirect)
 	return member
+}
+
+// customAgentBotID exposes the database bot record key only for an actual
+// custom Agent Bot that has already passed the caller's discovery checks. The
+// public member ID remains the bot's user ID; built-in system identities and
+// malformed/mismatched joins must never acquire a botId field.
+func customAgentBotID(record MemberRecord) string {
+	if record.Kind != "bot" || systemIdentityName(record.ID) != "" || record.BotAccess == nil {
+		return ""
+	}
+	botID := strings.TrimSpace(record.BotAccess.ID)
+	if botID == "" || strings.TrimSpace(record.BotAccess.BotUserID) != strings.TrimSpace(record.ID) {
+		return ""
+	}
+	return botID
+}
+
+func canStartDirectForActor(record MemberRecord, actor *auth.Actor) bool {
+	if actor == nil || actor.ID == "" || actor.ID == record.ID {
+		return false
+	}
+	if record.BotAccess != nil {
+		return record.BotAccess.DirectAllows(actor.ID, true, record.NormallyVisible)
+	}
+	return canStartDirect(record)
 }
 
 func systemIdentityName(id string) string {

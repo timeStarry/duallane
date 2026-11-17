@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { prepareAgentInputs } from "../src/inbound.js";
+import { validateArtifactBytes } from "../src/media.js";
+import { officeEnvelopeFixture } from "../test-support/office-envelope-fixture.js";
 
 function fixture() {
   const message = { id: "m1", content: { blocks: [{ type: "attachment", attachmentId: "a1" }] } };
@@ -53,4 +55,22 @@ test("invalid attachment bytes consume the shared transfer budget", async () => 
     reads += 1; return { bytes: Buffer.alloc(10 * 1024 * 1024), mimeType: "image/png" };
   } } }), (error) => error.code === "input.attachment_limit");
   assert.equal(reads, 1);
+});
+
+test("authorized Markdown and Office attachments round-trip as untrusted inputs without expanding public URL formats", async () => {
+  const document = officeEnvelopeFixture();
+  const officeType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+  for (const [bytes, mimeType, encoding, kind] of [
+    [Buffer.from("# 已授权的说明\n\n内容"), "text/markdown", "utf8", "text"],
+    [document, officeType, "base64", "document"],
+  ]) {
+    const inputs = await prepareAgentInputs({ ...fixture(), client: { async readAttachment() { return { bytes, mimeType }; } } });
+    assert.equal(inputs[0].status, "available"); assert.equal(inputs[0].trust, "untrusted-attachment");
+    assert.equal(inputs[0].encoding, encoding); assert.equal(inputs[0].kind, kind);
+    assert.deepEqual(Buffer.from(inputs[0].data, encoding), bytes);
+    assert.throws(() => validateArtifactBytes(bytes, mimeType, { source: "https" }), { code: "artifact.unsupported_type" });
+  }
+  const invalid = await prepareAgentInputs({ ...fixture(), client: { async readAttachment() { return { bytes: Buffer.from("not an office file"), mimeType: officeType }; } } });
+  assert.equal(invalid[0].status, "unavailable"); assert.equal(invalid[0].code, "artifact.type_mismatch");
+  assert.equal(invalid[0].data, undefined);
 });

@@ -770,7 +770,7 @@ func (s *Service) Invalidate(ctx context.Context, spaceID, cardID string, status
 	return result, nil
 }
 
-func (s *Service) updateCustomBot(ctx context.Context, input CustomBotUpdateInput) (*Card, error) {
+func (s *Service) updateCustomBot(ctx context.Context, input CustomBotUpdateInput, transactions ...Tx) (*Card, error) {
 	spaceID, err := NormalizeIdentifier(input.SpaceID, CodeCardInvalidSpace, "空间 ID 无效")
 	if err != nil {
 		return nil, toError(err)
@@ -790,18 +790,22 @@ func (s *Service) updateCustomBot(ctx context.Context, input CustomBotUpdateInpu
 	if input.ExpectedRevision < 1 {
 		return nil, NewError(CodeCardInvalidRevision, "卡片版本无效", 400)
 	}
-	actor, err := s.requireActor(ctx, s.repo, spaceID, botUserID, true)
+	var reader ReadRepository = s.repo
+	if len(transactions) > 0 {
+		reader = transactions[0]
+	}
+	actor, err := s.requireActor(ctx, reader, spaceID, botUserID, true)
 	if err != nil {
 		return nil, err
 	}
 	if actor.Kind != "bot" {
 		return nil, NewError(CodeCardInvalidOwner, "卡片所有者无效", 403)
 	}
-	if err := s.requireCustomBot(ctx, s.repo, spaceID, botID, actor.ID); err != nil {
+	if err := s.requireCustomBot(ctx, reader, spaceID, botID, actor.ID); err != nil {
 		return nil, err
 	}
 	var result *Card
-	err = s.repo.WithTx(ctx, func(tx Tx) error {
+	mutate := func(tx Tx) error {
 		if err := s.recheckCustomBotWriter(ctx, tx, spaceID, botID, actor.ID); err != nil {
 			return err
 		}
@@ -855,7 +859,12 @@ func (s *Service) updateCustomBot(ctx context.Context, input CustomBotUpdateInpu
 		}
 		result = s.publicCard(updated, definition, validated)
 		return nil
-	})
+	}
+	if len(transactions) > 0 {
+		err = mutate(transactions[0])
+	} else {
+		err = s.repo.WithTx(ctx, mutate)
+	}
 	if err != nil {
 		return nil, normalizeError(err)
 	}

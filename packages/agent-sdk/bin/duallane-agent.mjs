@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import zlib from "node:zlib";
 import { readBoundedFile } from "../src/file-input.js";
+import { optionalGatewayResult } from "../src/transport.js";
 import {
   compareRuntimeSemver,
   DualLaneAgentClient,
@@ -16,6 +17,8 @@ import {
   inferMimeTypeFromFileName,
 } from "../src/index.js";
 import { readAgentTaskSummary } from "../src/task-runtime.js";
+import { createTaskBrokerMcpAdapter, buildAgentInteractiveCard, safeAgentOperationReference } from "../src/task-tools.js";
+import { buildMessageContent, parseMessageContent, messageText, messageMention, messageAttachment, messageLink } from "../src/message-content.js";
 import { createDualLaneMcpServer, DUALLANE_MCP_TOOLS, startDualLaneMcpStdioServer } from "../src/mcp.js";
 import {
   buildDaemonAgentPrompt,
@@ -28,6 +31,7 @@ import {
   resolveStandaloneScriptPath,
   restartInstalledDaemons,
   runResidentDaemon,
+  runtimeUpgradeCommand,
   stageRuntimeSelfUpdate,
 } from "../src/daemon.js";
 import {
@@ -65,6 +69,7 @@ export {
   loadAgentProfile,
   saveAgentProfile,
   deleteAgentProfile,
+  buildMessageContent, parseMessageContent, messageText, messageMention, messageAttachment, messageLink,
 };
 
 function parseArgs(argv) {
@@ -108,13 +113,23 @@ Usage:
   duallane-agent daemon run --cmd <command> [--allow-public-media] [--media-dns-servers 1.1.1.1,8.8.8.8]
   duallane-agent daemon <install|start|stop|restart|uninstall|status|logs|run> --cmd <command> [--agent auto|cmd] [--workdir <dir>] [--profile default]
   duallane-agent mcp [--profile default]
+  duallane-agent mcp --task
+  duallane-agent capabilities [conversationId] [--task-id <id>] [--profile default]
+  duallane-agent task <begin|status|cancel> <event-or-task-id> [--profile default]
+  duallane-agent history [conversationId] --task-id <id> [--before <cursor>] [--limit 12]
+  duallane-agent search [conversationId] --task-id <id> --query <text> [--author <memberId>] [--start-time <RFC3339>] [--end-time <RFC3339>]
+  duallane-agent get-message <messageId> --task-id <id>
+  duallane-agent members [conversationId] --task-id <id>
+  duallane-agent operation <taskId> <operation> <key> [--profile default]
+  duallane-agent send-card <conversationId> --card-json <fixed-action-card> [--task-id <id>]
+  duallane-agent update-card <cardId> --card-json <fixed-action-card> --expected-revision <n> --task-id <id>
   duallane-agent status [--profile default]
   duallane-agent conversations [--profile default]
   duallane-agent updates [--ack] [--timeout 20] [--profile default]
   duallane-agent wait [--timeout 3600] [--transport auto|ws|poll] [--profile default]
-  duallane-agent send <conversationId> <text> [--reply-to <messageId>] [--profile default]
-  duallane-agent send-file <conversationId> <filePath> [--name <fileName>] [--mime <mimeType>] [--text <caption>] [--reply-to <messageId>] [--profile default]
-  duallane-agent edit <messageId> <text> [--profile default]
+  duallane-agent send <conversationId> [text] [--content-json <structured-content>] [--task-id <id>] [--reply-to <messageId>] [--profile default]
+  duallane-agent send-file <conversationId> <filePath> [--task-id <id>] [--name <fileName>] [--mime <mimeType>] [--text <caption>] [--reply-to <messageId>] [--profile default]
+  duallane-agent edit <messageId> [text] [--content-json <content>] [--expected-version <version>] [--task-id <id>] [--profile default]
   duallane-agent typing <conversationId> [--state thinking|typing] [--profile default]
   duallane-agent publish-mobile <apkPath> [--min-native-code <code>] [--title <title>] [--notes <md> | --notes-file <file>] [--profile default]
   duallane-agent publish-mobile-ota <wwwDirOrZip> --version <semver> [--min-native-code <code>] [--title <title>] [--notes <md> | --notes-file <file>] [--profile default]
@@ -141,7 +156,7 @@ async function runSetup(positionals, flags) {
     : [...DEFAULT_SETUP_SCOPES];
 
   const setupClient = new DualLaneAgentSetupClient({ url: target.origin });
-  const initialCheck = await setupClient.status(target.setupSessionId).catch(() => null);
+  const initialCheck = await setupClient.status(target.setupSessionId).catch(optionalGatewayResult);
   const initialSession = initialCheck?.setup || initialCheck?.session || null;
   const initialStatus = initialSession ? String(initialSession.status || "") : "";
 
@@ -179,8 +194,8 @@ async function runSetup(positionals, flags) {
       });
       const rawToken = String(exchanged?.token || "").trim();
       const client = new DualLaneAgentClient({ url: target.origin, token: rawToken });
-      const me = await client.getMe().catch(() => null);
-      const convs = await client.listConversations().catch(() => ({ conversations: [] }));
+      const me = await client.getMe().catch(optionalGatewayResult);
+      const convs = await client.listConversations().catch((error) => optionalGatewayResult(error, { conversations: [] }));
 
       const saved = saveAgentProfile(profile, {
         url: target.origin,
@@ -306,8 +321,8 @@ async function main() {
   if (subcommand === "doctor") {
     const { client, profile } = requireClient(flags.profile);
     const [doctor, me, updateInfo] = await Promise.all([
-      client.getDoctor().catch(() => null),
-      client.getMe().catch(() => null),
+      client.getDoctor().catch(optionalGatewayResult),
+      client.getMe().catch(optionalGatewayResult),
       checkRuntimeUpdate({ origin: profile.url, targetPath: resolveStandaloneScriptPath(flags.script) }).catch(() => null),
     ]);
     process.stdout.write(
@@ -335,7 +350,69 @@ async function main() {
   }
 
   if (subcommand === "mcp") {
-    startDualLaneMcpStdioServer({ defaultProfile: flags.profile || "default" });
+    if (flags.task) {
+      const server = createTaskBrokerMcpAdapter();
+      delete process.env.DUALLANE_TASK_BROKER_URL;
+      delete process.env.DUALLANE_TASK_BROKER_KEY;
+      startDualLaneMcpStdioServer({ server, maxInputBytes: 128 * 1024 });
+    } else {
+      if (process.env.DUALLANE_TASK_BROKER_URL || process.env.DUALLANE_TASK_BROKER_KEY) throw new Error("Task adapters must use mcp --task; operator profiles are unavailable.");
+      startDualLaneMcpStdioServer({ defaultProfile: flags.profile || "default" });
+    }
+    return;
+  }
+
+  if (subcommand === "operation") {
+    const [taskId, operation, key] = positionals.slice(1);
+    if (!taskId || !operation || !key) throw new Error("Usage: duallane-agent operation <taskId> <operation> <key>");
+    const { client } = requireClient(flags.profile);
+    const scoped = client.forTask((await client.getTask(taskId)).task);
+    try { process.stdout.write(JSON.stringify(await scoped.getOperation(operation, key), null, 2) + "\n"); }
+    finally { scoped.close(); }
+    return;
+  }
+
+  if (subcommand === "send-card" || subcommand === "update-card") {
+    const [target] = positionals.slice(1);
+    if (!target || typeof flags["card-json"] !== "string") throw new Error("Card operations require an object ID and --card-json.");
+    if (subcommand === "update-card" && typeof flags["task-id"] !== "string") throw new Error("update-card requires --task-id; legacy operator card updates are not exposed by this command.");
+    const cardInput = JSON.parse(flags["card-json"]), card = buildAgentInteractiveCard(cardInput);
+    const { client } = requireClient(flags.profile);
+    const scoped = flags["task-id"] ? client.forTask((await client.getTask(flags["task-id"])).task) : client;
+    try {
+      const result = subcommand === "update-card" ? await scoped.updateFeishuCard(target, { card, expectedRevision: Number(flags["expected-revision"]), fallbackText: cardInput.fallbackText || cardInput.title })
+        : await scoped.sendFeishuCard({ conversationId: target, card, fallbackText: cardInput.fallbackText || cardInput.title });
+      process.stdout.write(JSON.stringify(result, null, 2) + "\n");
+    } finally { if (scoped !== client) scoped.close(); }
+    return;
+  }
+
+  if (["capabilities", "task", "history", "search", "get-message", "members"].includes(subcommand)) {
+    const { client } = requireClient(flags.profile);
+    if (subcommand === "task") {
+      const [action, id] = positionals.slice(1);
+      if (!id || !["begin", "status", "cancel"].includes(action)) throw new Error("Usage: duallane-agent task begin <eventId> | status <taskId> | cancel <taskId>");
+      const result = action === "begin" ? await client.createTask({ eventId: id }) : action === "cancel" ? await client.cancelAgentTask(id) : await client.getTask(id);
+      process.stdout.write(JSON.stringify(result, null, 2) + "\n"); return;
+    }
+    if (subcommand === "capabilities" && !flags["task-id"]) {
+      process.stdout.write(JSON.stringify(await client.getCapabilities(positionals[1]), null, 2) + "\n"); return;
+    }
+    if (typeof flags["task-id"] !== "string") throw new Error("This operation requires --task-id <server-task-id>.");
+    const scoped = client.forTask((await client.getTask(flags["task-id"])).task);
+    try {
+      const history = {};
+      for (const [flag, field] of [["before", "before"], ["query", "query"], ["author", "authorId"], ["start-time", "startTime"], ["end-time", "endTime"]]) {
+        if (flags[flag] !== undefined) history[field] = flags[flag];
+      }
+      if (flags.limit !== undefined) history.limit = Number(flags.limit);
+      const result = subcommand === "capabilities" ? await scoped.getCapabilities()
+        : subcommand === "get-message" ? await scoped.getMessage(positionals[1])
+          : subcommand === "members" ? await scoped.listMembers(positionals[1] || scoped.task.conversationId)
+            : subcommand === "search" ? await scoped.searchMessages(positionals[1] || scoped.task.conversationId, history)
+              : await scoped.listHistory(positionals[1] || scoped.task.conversationId, history);
+      process.stdout.write(JSON.stringify(result, null, 2) + "\n");
+    } finally { scoped.close(); }
     return;
   }
 
@@ -348,7 +425,7 @@ async function main() {
     const { client, profile } = requireClient(flags.profile);
     const [me, convs] = await Promise.all([
       client.getMe(),
-      client.listConversations().catch(() => ({ conversations: [] })),
+      client.listConversations().catch((error) => optionalGatewayResult(error, { conversations: [] })),
     ]);
     const remoteLatest = String(convs?.latestSdkVersion || "").trim();
     const updateAvailable =
@@ -397,7 +474,7 @@ async function main() {
       const fallbackSeq = Math.max(0, Number(res.currentSequence) - 100);
       const retry = await client
         .getUpdates({ afterSequence: fallbackSeq, limit: Number(flags.limit || 50), timeout })
-        .catch(() => null);
+        .catch(optionalGatewayResult);
       if (retry && !retry.syncRequired) {
         res = retry;
       }
@@ -452,11 +529,11 @@ async function main() {
       }
       const ev = polled.event;
       if (ev.conversationId) {
-        await client.setTyping(ev.conversationId).catch(() => {});
+        await client.setTyping(ev.conversationId).catch(optionalGatewayResult);
       }
       let context = null;
       if (ev.conversationId && profile.scopes?.includes("messages:read_context")) {
-        context = await client.getContext(ev.conversationId, { limit: 15 }).catch(() => null);
+        context = await client.getContext(ev.conversationId, { limit: 15 }).catch(optionalGatewayResult);
       }
       return {
         status: "event",
@@ -499,11 +576,11 @@ async function main() {
                   settled = true;
                   clearTimeout(timer);
                   if (event.conversationId) {
-                    await client.setTyping(event.conversationId).catch(() => {});
+                    await client.setTyping(event.conversationId).catch(optionalGatewayResult);
                   }
                   let context = null;
                   if (event.conversationId && profile.scopes?.includes("messages:read_context")) {
-                    context = await client.getContext(event.conversationId, { limit: 15 }).catch(() => null);
+                    context = await client.getContext(event.conversationId, { limit: 15 }).catch(optionalGatewayResult);
                   }
                   setImmediate(() => client.stop());
                   resolve({
@@ -548,15 +625,19 @@ async function main() {
   if (subcommand === "send") {
     const [conversationId, ...rest] = positionals.slice(1);
     const text = rest.join(" ").trim();
-    if (!conversationId || !text) {
+    const content = typeof flags["content-json"] === "string" ? buildMessageContent(JSON.parse(flags["content-json"])) : undefined;
+    if (!conversationId || (!text && !content)) {
       throw new Error("Usage: duallane-agent send <conversationId> <text> [--reply-to <msgId>]");
     }
     const { client } = requireClient(flags.profile);
-    const res = await client.sendMessage({
+    const scoped = flags["task-id"] ? client.forTask((await client.getTask(flags["task-id"])).task) : client;
+    let res;
+    try { res = await scoped.sendMessage({
       conversationId,
       text,
+      content,
       replyToMessageId: typeof flags["reply-to"] === "string" ? flags["reply-to"] : undefined,
-    });
+    }); } finally { if (scoped !== client) scoped.close(); }
     process.stdout.write(JSON.stringify(res, null, 2) + "\n");
     return;
   }
@@ -577,14 +658,16 @@ async function main() {
         ? flags.mime.trim()
         : inferMimeTypeFromFileName(fileName);
     const { client } = requireClient(flags.profile);
-    const res = await client.sendFile({
+    const scoped = flags["task-id"] ? client.forTask((await client.getTask(flags["task-id"])).task) : client;
+    let res;
+    try { res = await scoped.sendFile({
       conversationId,
       bytes,
       fileName,
       mimeType,
       text: typeof flags.text === "string" ? flags.text : undefined,
       replyToMessageId: typeof flags["reply-to"] === "string" ? flags["reply-to"] : undefined,
-    });
+    }); } finally { if (scoped !== client) scoped.close(); }
     process.stdout.write(JSON.stringify(res, null, 2) + "\n");
     return;
   }
@@ -592,11 +675,16 @@ async function main() {
   if (subcommand === "edit") {
     const [messageId, ...rest] = positionals.slice(1);
     const text = rest.join(" ").trim();
-    if (!messageId || !text) {
+    const content = typeof flags["content-json"] === "string" ? buildMessageContent(JSON.parse(flags["content-json"])) : undefined;
+    if (!messageId || (!text && !content)) {
       throw new Error("Usage: duallane-agent edit <messageId> <text> [--profile default]");
     }
     const { client } = requireClient(flags.profile);
-    const res = await client.editMessage(messageId, text);
+    const scoped = flags["task-id"] ? client.forTask((await client.getTask(flags["task-id"])).task) : client;
+    let res;
+    const input = flags["task-id"] || content || flags["expected-version"] ? { plainText: text || undefined, content, expectedVersion: flags["expected-version"] } : text;
+    try { res = await scoped.editMessage(messageId, input); }
+    finally { if (scoped !== client) scoped.close(); }
     process.stdout.write(JSON.stringify(res, null, 2) + "\n");
     return;
   }
@@ -608,7 +696,10 @@ async function main() {
     }
     const { client } = requireClient(flags.profile);
     const state = flags.state === "typing" ? "typing" : "thinking";
-    const res = await client.setTyping(conversationId, { state });
+    const scoped = flags["task-id"] ? client.forTask((await client.getTask(flags["task-id"])).task) : client;
+    let res;
+    try { res = await scoped.setTyping(conversationId, { state }); }
+    finally { if (scoped !== client) scoped.close(); }
     process.stdout.write(JSON.stringify(res, null, 2) + "\n");
     return;
   }
@@ -811,6 +902,13 @@ if (isDirectCli) {
   main().catch((err) => {
     const safeMsg = String(err?.message || err).replace(/dl_bot_[A-Za-z0-9_-]{12,}/gu, "[REDACTED]");
     process.stderr.write(`[DualLane Error] ${safeMsg}\n`);
+    if (err?.code === "sdk.upgrade_required") {
+      const { flags } = parseArgs(process.argv.slice(2));
+      const profile = typeof flags.profile === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u.test(flags.profile) ? flags.profile : "default";
+      process.stderr.write(JSON.stringify({ code: err.code, retryable: false, updateCommand: runtimeUpgradeCommand(fileURLToPath(import.meta.url), profile, err.upgrade?.runtimeManifestUrl), upgrade: err.upgrade }) + "\n");
+    }
+    const operation = safeAgentOperationReference(err?.operation);
+    if (operation) process.stderr.write(JSON.stringify({ operation, safeToRetry: false }) + "\n");
     process.exitCode = 1;
   });
 }

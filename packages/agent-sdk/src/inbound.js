@@ -27,15 +27,18 @@ export async function prepareAgentInputs({ client, event, triggerMessage, contex
       const result = await client.readAttachment({ ...reference, mode, maxBytes: Math.min(remaining, mode === "preview" ? 64 * 1024 : remaining), signal });
       const available = remaining;
       remaining -= result.bytes.byteLength;
-      validateArtifactBytes(result.bytes, result.mimeType, { source: "https", maxBytes: available });
+      // A currently authorized DL attachment is distinct from an arbitrary
+      // public URL. Validate its opaque envelope without rendering/executing it.
+      const checked = validateArtifactBytes(result.bytes, result.mimeType, { source: "inline", maxBytes: available });
+      const textInput = checked.mimeType.startsWith("text/") || ["application/json", "application/xml", "application/javascript"].includes(checked.mimeType);
       inputs.push({
         ...reference,
         status: "available",
-        kind: result.mimeType.startsWith("image/") ? "image" : result.mimeType === "text/plain" ? "text" : "document",
-        mimeType: result.mimeType,
+        kind: checked.mimeType.startsWith("image/") ? "image" : textInput ? "text" : "document",
+        mimeType: checked.mimeType,
         byteSize: result.bytes.byteLength,
-        encoding: result.mimeType === "text/plain" ? "utf8" : "base64",
-        data: result.mimeType === "text/plain" ? result.bytes.toString("utf8") : result.bytes.toString("base64"),
+        encoding: textInput ? "utf8" : "base64",
+        data: Buffer.from(result.bytes).toString(textInput ? "utf8" : "base64"),
         trust: "untrusted-attachment",
       });
     } catch (error) {

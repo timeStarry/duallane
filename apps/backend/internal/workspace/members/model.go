@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/auth"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/botaccess"
 )
 
 const (
@@ -45,7 +46,11 @@ type MemberCapabilities struct {
 // Member is the public member projection. Private identity columns such as
 // email and github_id deliberately have no representation in this type.
 type Member struct {
-	ID                 string             `json:"id"`
+	ID string `json:"id"`
+	// BotID is the stable workspace_agent_bots record ID for a visible custom
+	// Agent Bot. It is deliberately absent for humans and built-in system bots;
+	// ID remains the represented user identity in every case.
+	BotID              string             `json:"botId,omitempty"`
 	GitHubLogin        string             `json:"githubLogin,omitempty"`
 	DisplayName        string             `json:"displayName"`
 	Nickname           *string            `json:"nickname"`
@@ -99,6 +104,9 @@ func (m Member) MarshalJSON() ([]byte, error) {
 		if m.AvatarURL != "" {
 			wire["avatarUrl"] = m.AvatarURL
 		}
+		if m.BotID != "" {
+			wire["botId"] = m.BotID
+		}
 	}
 	return json.Marshal(wire)
 }
@@ -119,6 +127,9 @@ type MemberRecord struct {
 	Role               string
 	JoinedAt           time.Time
 	NormallyVisible    bool
+	// BotAccess is populated only for custom Agent Bot identities. It is an
+	// internal authorization projection and is never serialized in Member.
+	BotAccess *botaccess.Record
 }
 
 type VisibilityRule struct {

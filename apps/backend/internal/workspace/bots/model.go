@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/auth"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/botpolicy"
 )
 
 const (
@@ -193,7 +194,10 @@ type BotSettings struct {
 	AllowedMemberIDs     []string        `json:"allowedMemberIds"`
 	Context              ContextSettings `json:"context"`
 	Limits               Limits          `json:"limits"`
-	UpdatedAt            string          `json:"updatedAt"`
+	// AccessPolicy is nil for legacy settings. A non-nil value is the explicit
+	// V2 policy; callers must never derive it from legacy fields.
+	AccessPolicy *botpolicy.Policy `json:"accessPolicy,omitempty"`
+	UpdatedAt    string            `json:"updatedAt"`
 }
 
 type SettingsRecord struct {
@@ -221,6 +225,7 @@ type SettingsRecord struct {
 	LongTermSummaryEnabled    bool
 	AllowedMemberIDs          []string
 	Limits                    Limits
+	AccessPolicy              *botpolicy.Policy
 	CreatedAt                 time.Time
 	UpdatedAt                 time.Time
 }
@@ -452,6 +457,7 @@ type UpdateSettingsInput struct {
 	IncludeAttachmentMetadata *bool
 	AllowAttachmentPreview    *bool
 	LongTermSummaryEnabled    *bool
+	AccessPolicy              *botpolicy.Policy
 }
 
 type GroupPoliciesInput struct {
@@ -613,8 +619,20 @@ func (r SettingsRecord) Public() BotSettings {
 			WindowSeconds: r.ContextWindowSeconds, IncludeReplies: r.IncludeReplies, IncludeSystemEvents: r.IncludeSystemEvents,
 			IncludeAttachmentMetadata: r.IncludeAttachmentMetadata, AllowAttachmentPreview: r.AllowAttachmentPreview,
 			LongTermSummaryEnabled: r.LongTermSummaryEnabled},
-		Limits: r.Limits, UpdatedAt: formatTime(r.UpdatedAt),
+		Limits: r.Limits, AccessPolicy: cloneAccessPolicy(r.AccessPolicy), UpdatedAt: formatTime(r.UpdatedAt),
 	}
+}
+
+func cloneAccessPolicy(value *botpolicy.Policy) *botpolicy.Policy {
+	if value == nil {
+		return nil
+	}
+	copy := *value
+	copy.Discovery.MemberIDs = cloneStrings(value.Discovery.MemberIDs)
+	copy.Direct.MemberIDs = cloneStrings(value.Direct.MemberIDs)
+	copy.Groups.MemberIDs = cloneStrings(value.Groups.MemberIDs)
+	copy.Groups.AllowedBotIDs = cloneStrings(value.Groups.AllowedBotIDs)
+	return &copy
 }
 
 func (r GroupPolicyRecord) Public() GroupPolicy {

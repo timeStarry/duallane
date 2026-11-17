@@ -77,7 +77,7 @@ test("Go Workspace browser coverage runs the current AppV1 acceptance suite with
   assert.equal((job.match(/run: pnpm test:e2e:workspace-go\n/g) || []).length, 1);
   assert.doesNotMatch(job, /--grep|--project|--retry|--timeout|continue-on-error|testIgnore|testMatch/);
 
-  assert.match(config, /testMatch: "workspace-v1-acceptance\.spec\.ts"/);
+  assert.match(config, /testMatch: \["workspace-v1-acceptance\.spec\.ts", "agent-platform-acceptance\.spec\.ts"\]/);
   assert.match(config, /outputDir: "\.private-test-results\/workspace-go-browser"/);
   for (const option of ["trace", "screenshot", "video"]) {
     assert.match(config, new RegExp(`${option}: "off"`));

@@ -199,3 +199,16 @@ await client.connect({
 ```
 
 Bot tokens are sent exclusively in `Authorization: Bearer ...` headers and are redacted from all SDK error messages.
+
+## 1.2 task tools and integration boundaries
+
+Load the instance's `/integrations/duallane-agent/SKILL.md` and the versioned
+channel contract before connecting. Operator MCP/profile commands are privileged
+connection controls; they must not be exposed as ordinary group tools. Managed
+bridges use `mcp --task` with a task-local broker, not a Bot credential in prompts.
+
+The SDK supplies authenticated messages, structured mentions, history/search,
+attachments, bounded task execution and publication receipts. Your Agent supplies
+its model, search/image generation tools, execution sandbox and memory isolation.
+Use `capabilities` to detect actual server features. Generic state subscriptions,
+threads and cross-conversation forwarding are not part of this edition.

@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/auth"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/botaccess"
 	workspaceMembers "github.com/timestarry/duallane/apps/backend/internal/workspace/members"
 	workspaceMessages "github.com/timestarry/duallane/apps/backend/internal/workspace/messages"
 )
@@ -91,7 +92,11 @@ func (r *PGRepository) ListConversationRecords(ctx context.Context, spaceID, act
 		return nil, internalError("list conversations", err)
 	}
 	defer rows.Close()
-	return scanConversationRecords(rows)
+	items, err := scanConversationRecords(rows)
+	if err != nil {
+		return nil, err
+	}
+	return filterVisibleConversationRecords(ctx, r.pool, spaceID, actorID, items)
 }
 
 func (r *PGRepository) GetVisibleConversationRecord(ctx context.Context, spaceID, actorID, conversationID string) (*ConversationRecord, error) {
@@ -106,6 +111,13 @@ func (r *PGRepository) GetVisibleConversationRecord(ctx context.Context, spaceID
 	}
 	if err != nil {
 		return nil, internalError("get conversation", err)
+	}
+	visible, err := visibleConversationForActor(ctx, r.pool, spaceID, actorID, record)
+	if err != nil {
+		return nil, err
+	}
+	if !visible {
+		return nil, nil
 	}
 	return &record, nil
 }
@@ -357,7 +369,11 @@ func (t *pgTx) ListConversationRecords(ctx context.Context, spaceID, actorID str
 		return nil, internalError("list conversations", err)
 	}
 	defer rows.Close()
-	return scanConversationRecords(rows)
+	items, err := scanConversationRecords(rows)
+	if err != nil {
+		return nil, err
+	}
+	return filterVisibleConversationRecords(ctx, t.tx, spaceID, actorID, items)
 }
 
 func (t *pgTx) GetVisibleConversationRecord(ctx context.Context, spaceID, actorID, conversationID string) (*ConversationRecord, error) {
@@ -369,6 +385,13 @@ func (t *pgTx) GetVisibleConversationRecord(ctx context.Context, spaceID, actorI
 	}
 	if err != nil {
 		return nil, internalError("get conversation", err)
+	}
+	visible, err := visibleConversationForActor(ctx, t.tx, spaceID, actorID, record)
+	if err != nil {
+		return nil, err
+	}
+	if !visible {
+		return nil, nil
 	}
 	return &record, nil
 }
@@ -828,6 +851,51 @@ LEFT JOIN messages m ON m.conversation_id = c.id AND m.space_id = c.space_id
 	AND m.topic_id IS NULL AND m.deleted_at IS NULL
 `
 
+func visibleConversationForActor(ctx context.Context, q botaccess.Queryer, spaceID, actorID string, record ConversationRecord) (bool, error) {
+	if record.Type != string(ConversationTypeDirect) {
+		return true, nil
+	}
+	var botUserID string
+	err := q.QueryRow(ctx, `
+		SELECT b.bot_user_id
+		FROM conversation_members cm
+		INNER JOIN workspace_agent_bots b ON b.space_id = $1 AND b.bot_user_id = cm.user_id AND b.status <> 'deleted'
+		WHERE cm.conversation_id = $2 AND cm.user_id <> $3 AND cm.removed_at IS NULL
+		LIMIT 1
+	`, spaceID, record.ID, actorID).Scan(&botUserID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return true, nil
+	}
+	if err != nil {
+		return false, internalError("check Agent Bot conversation visibility", err)
+	}
+	access, err := botaccess.LoadByUserID(ctx, q, spaceID, botUserID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return true, nil
+	}
+	if err != nil {
+		return false, internalError("load Agent Bot conversation policy", err)
+	}
+	if access.Policy == nil {
+		return true, nil
+	}
+	return access.DirectAllows(actorID, true, false), nil
+}
+
+func filterVisibleConversationRecords(ctx context.Context, q botaccess.Queryer, spaceID, actorID string, records []ConversationRecord) ([]ConversationRecord, error) {
+	visible := make([]ConversationRecord, 0, len(records))
+	for _, record := range records {
+		allowed, err := visibleConversationForActor(ctx, q, spaceID, actorID, record)
+		if err != nil {
+			return nil, err
+		}
+		if allowed {
+			visible = append(visible, record)
+		}
+	}
+	return visible, nil
+}
+
 const baseConversationSelect = `SELECT
 	c.id, c.space_id, c.type, c.title, c.avatar_emoji, c.retention_count, c.created_at
 FROM conversations c
@@ -835,19 +903,33 @@ FROM conversations c
 
 const memberSelect = `SELECT
 	u.id, u.github_login, u.display_name, u.nickname, ur.remark, u.avatar_url,
-	u.search_discoverable, u.recall_reason, u.kind, sm.role, cm.joined_at
+	u.search_discoverable, u.recall_reason, u.kind, sm.role, cm.joined_at,
+	b_meta.id, b_meta.space_id, b_meta.owner_user_id, b_meta.bot_user_id, b_meta.status,
+	COALESCE(bs_meta.visibility_policy, b_meta.visibility_policy, 'private'),
+	COALESCE(bs_meta.allow_direct = 1, TRUE),
+	COALESCE(bs_meta.allow_group = 1, FALSE),
+	bs_meta.access_policy
 FROM conversation_members cm
 INNER JOIN users u ON u.id = cm.user_id
 INNER JOIN space_members sm ON sm.user_id = u.id
 LEFT JOIN user_remarks ur ON ur.owner_user_id = $3 AND ur.target_user_id = u.id
+LEFT JOIN workspace_agent_bots b_meta ON b_meta.space_id = sm.space_id AND b_meta.bot_user_id = u.id AND b_meta.status <> 'deleted'
+LEFT JOIN workspace_agent_bot_settings bs_meta ON bs_meta.bot_id = b_meta.id AND bs_meta.space_id = sm.space_id
 `
 
 const spaceMemberSelect = `SELECT
 	u.id, u.github_login, u.display_name, u.nickname, ur.remark, u.avatar_url,
-	u.search_discoverable, u.recall_reason, u.kind, sm.role, sm.joined_at
+	u.search_discoverable, u.recall_reason, u.kind, sm.role, sm.joined_at,
+	b_meta.id, b_meta.space_id, b_meta.owner_user_id, b_meta.bot_user_id, b_meta.status,
+	COALESCE(bs_meta.visibility_policy, b_meta.visibility_policy, 'private'),
+	COALESCE(bs_meta.allow_direct = 1, TRUE),
+	COALESCE(bs_meta.allow_group = 1, FALSE),
+	bs_meta.access_policy
 FROM users u
 INNER JOIN space_members sm ON sm.user_id = u.id
 LEFT JOIN user_remarks ur ON ur.owner_user_id = $3 AND ur.target_user_id = u.id
+LEFT JOIN workspace_agent_bots b_meta ON b_meta.space_id = sm.space_id AND b_meta.bot_user_id = u.id AND b_meta.status <> 'deleted'
+LEFT JOIN workspace_agent_bot_settings bs_meta ON bs_meta.bot_id = b_meta.id AND bs_meta.space_id = sm.space_id
 `
 
 const messageSelect = `SELECT
@@ -954,13 +1036,48 @@ func scanConversationRecords(rows pgx.Rows) ([]ConversationRecord, error) {
 func scanMemberRecord(row rowScanner) (MemberRecord, error) {
 	var record MemberRecord
 	var nickname, remark, avatarURL, recallReason *string
-	if err := row.Scan(&record.ID, &record.GitHubLogin, &record.DisplayName, &nickname, &remark, &avatarURL, &record.SearchDiscoverable, &recallReason, &record.Kind, &record.Role, &record.JoinedAt); err != nil {
+	var botID, botSpaceID, botOwnerID, botUserID, botStatus, botVisibility *string
+	var botAllowDirect, botAllowGroup *bool
+	var rawAccessPolicy []byte
+	if err := row.Scan(&record.ID, &record.GitHubLogin, &record.DisplayName, &nickname, &remark, &avatarURL, &record.SearchDiscoverable, &recallReason, &record.Kind, &record.Role, &record.JoinedAt,
+		&botID, &botSpaceID, &botOwnerID, &botUserID, &botStatus, &botVisibility, &botAllowDirect, &botAllowGroup, &rawAccessPolicy); err != nil {
 		return MemberRecord{}, err
 	}
 	record.Nickname = nickname
 	record.Remark = remark
 	record.AvatarURL = stringValuePtr(avatarURL)
 	record.RecallReason = recallReason
+	if botID != nil && strings.TrimSpace(*botID) != "" {
+		allowDirect, allowGroup := true, false
+		if botAllowDirect != nil {
+			allowDirect = *botAllowDirect
+		}
+		if botAllowGroup != nil {
+			allowGroup = *botAllowGroup
+		}
+		visibility := "private"
+		if botVisibility != nil {
+			visibility = *botVisibility
+		}
+		spaceID, ownerID, botUID, status := "", "", "", ""
+		if botSpaceID != nil {
+			spaceID = *botSpaceID
+		}
+		if botOwnerID != nil {
+			ownerID = *botOwnerID
+		}
+		if botUserID != nil {
+			botUID = *botUserID
+		}
+		if botStatus != nil {
+			status = *botStatus
+		}
+		access, accessErr := botaccess.NewRecord(*botID, spaceID, ownerID, botUID, status, visibility, allowDirect, allowGroup, rawAccessPolicy)
+		if accessErr != nil {
+			return MemberRecord{}, accessErr
+		}
+		record.BotAccess = &access
+	}
 	return record, nil
 }
 

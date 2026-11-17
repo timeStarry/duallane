@@ -142,6 +142,24 @@ type transactionalCardBlockValidator struct {
 	tx      workspacecards.Tx
 }
 
+func (w *messageWriter) EditBotMessageInTx(ctx context.Context, tx Tx, input MessageWriteRequest, messageID, version string, replace bool) (GatewayMessage, error) {
+	provider, ok := tx.(MessageTransactionProvider)
+	if !ok {
+		return GatewayMessage{}, internalError("edit task message", errors.New("message transaction required"))
+	}
+	content, err := toWorkspaceMessageContent(input.Content)
+	if err != nil {
+		return GatewayMessage{}, err
+	}
+	message, err := w.service.EditAgentMessageInTx(ctx, provider.MessageTransaction(), workspacemessages.AgentEditInput{
+		ActorID: input.ActorID, ConversationID: input.ConversationID, MessageID: messageID, ExpectedVersion: version, Content: content, ReplaceContent: replace, Meta: input.Meta,
+	})
+	if err != nil {
+		return GatewayMessage{}, normalizeRuntimeAdapterError(err, "edit task message")
+	}
+	return projectWorkspaceMessage(message), nil
+}
+
 func (v transactionalCardBlockValidator) ValidateBlockInTx(ctx context.Context, _ workspacemessages.Tx, actor *auth.Actor, conversationID string, block workspacemessages.Block) (workspacemessages.Block, error) {
 	if v.service == nil || v.tx == nil || actor == nil {
 		return workspacemessages.Block{}, workspacemessages.NewError(workspacemessages.CodeInternal, workspacemessages.MessageInternal, 500)
@@ -279,6 +297,21 @@ func (w *cardGateway) UpdateCustomBotCard(ctx context.Context, input CardUpdateR
 	})
 	if err != nil {
 		return Card{}, normalizeRuntimeAdapterError(err, "update bot card")
+	}
+	return projectWorkspaceCard(input.BotID, card), nil
+}
+
+func (w *cardGateway) UpdateCustomBotCardInTx(ctx context.Context, tx Tx, input CardUpdateRequest) (Card, error) {
+	provider, ok := tx.(CardTransactionProvider)
+	if !ok || provider.CardTransaction() == nil {
+		return Card{}, internalError("update task card", errors.New("card transaction required"))
+	}
+	card, err := w.service.UpdateCustomBotCardInTx(ctx, provider.CardTransaction(), workspacecards.CustomBotUpdateInput{
+		ActorID: input.BotUserID, SpaceID: input.SpaceID, CardID: input.CardID, BotID: input.BotID, BotUserID: input.BotUserID,
+		ExpectedRevision: input.ExpectedRevision, Payload: input.Payload, RawPayload: cloneRawJSON(input.RawPayload), FallbackText: input.FallbackText, Meta: input.Meta.Safe(),
+	})
+	if err != nil {
+		return Card{}, normalizeRuntimeAdapterError(err, "update task card")
 	}
 	return projectWorkspaceCard(input.BotID, card), nil
 }

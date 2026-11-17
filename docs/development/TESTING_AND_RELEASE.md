@@ -66,7 +66,8 @@ browser-only keys, wrong-key isolation, file transfer, and responsive behavior.
 The current P2P transport is encrypted WebSocket only; these gates do not claim
 WebRTC, ICE/TURN, automatic reconnection, or local transcript-save coverage.
 
-The Workspace browser gate selects `workspace-v1-acceptance.spec.ts`, using the
+The Workspace browser gate selects `workspace-v1-acceptance.spec.ts` and
+`agent-platform-acceptance.spec.ts`, using the
 Go Workspace service and Vite with the explicit disposable PostgreSQL environment
 above. Other retained `workspace*.spec.ts` files describe the retired UI and are
 historical regression references, not current browser-gate evidence. Their old

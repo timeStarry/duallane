@@ -90,12 +90,15 @@ type UploadStatusInput struct {
 	Meta     auth.RequestMeta
 }
 
+type FinalizeTransaction func(context.Context, func(Tx) error) error
+
 type CompleteUploadInput struct {
-	ActorID  string
-	UploadID string
-	Mode     string
-	Content  io.Reader
-	Meta     auth.RequestMeta
+	FinalizeTransaction FinalizeTransaction `json:"-"`
+	ActorID             string
+	UploadID            string
+	Mode                string
+	Content             io.Reader
+	Meta                auth.RequestMeta
 }
 
 type FailUploadInput struct {
@@ -264,7 +267,7 @@ func (s *Service) withTransaction(ctx context.Context, actorID string, meta auth
 
 type fileActorLookup func(context.Context, ReadRepository, string) (*auth.Actor, error)
 
-func (s *Service) withActorTransaction(ctx context.Context, actorID string, meta auth.RequestMeta, lookup fileActorLookup, fn func(Tx, *auth.Actor, time.Time) (any, *rejection, error)) (any, error) {
+func (s *Service) withActorTransaction(ctx context.Context, actorID string, meta auth.RequestMeta, lookup fileActorLookup, fn func(Tx, *auth.Actor, time.Time) (any, *rejection, error), overrides ...FinalizeTransaction) (any, error) {
 	if s == nil || s.repo == nil {
 		return nil, internalError("workspace file service", errors.New("repository is required"))
 	}
@@ -278,7 +281,11 @@ func (s *Service) withActorTransaction(ctx context.Context, actorID string, meta
 	meta = meta.Safe()
 	var result any
 	var rejected *rejection
-	err := s.repo.WithTx(ctx, func(tx Tx) error {
+	transact := FinalizeTransaction(s.repo.WithTx)
+	if len(overrides) > 0 && overrides[0] != nil {
+		transact = overrides[0]
+	}
+	err := transact(ctx, func(tx Tx) error {
 		if tx == nil {
 			return errors.New("transaction is required")
 		}
@@ -1200,7 +1207,7 @@ func (s *Service) completeUpload(ctx context.Context, input CompleteUploadInput,
 			return nil, nil, normalizeRepositoryError(usageErr)
 		}
 		return UploadResult{Status: string(TransferCompleted), ID: uploadID, UsedToday: maxInt64(used, 0), RemainingBytes: remainingQuota(used, s.dailyQuotaBytes), DailyQuotaBytes: s.dailyQuotaBytes, Attachment: ptrAttachment(projectAttachment(*completedAttachment, currentActor))}, nil, nil
-	})
+	}, input.FinalizeTransaction)
 	if txErr != nil {
 		cleanupCtx, cancelCleanup := context.WithTimeout(context.Background(), storageMutationTimeout)
 		defer cancelCleanup()

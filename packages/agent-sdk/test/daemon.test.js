@@ -134,6 +134,56 @@ test("an explicit command migrates retired daemon records unless an agent mode i
   }
 });
 
+test("explicit daemon restart clears a prior pause before launch and cannot overwrite a child's newer pause", () => {
+  const fixtureDir = fs.mkdtempSync(path.join(os.tmpdir(), "dl-daemon-pause-order-"));
+  const configDir = path.join(fixtureDir, "agents");
+  const stateDir = path.join(fixtureDir, "daemons");
+  const recordPath = path.join(stateDir, "default.json");
+  try {
+    saveAgentProfile("default", { url: "https://synthetic.example", token: "synthetic-unused-token" }, { configDir });
+    fs.mkdirSync(stateDir);
+    fs.writeFileSync(recordPath, JSON.stringify({ cmd: "synthetic-bridge", agent: "cmd", pausedReason: "sdk.upgrade_required", healthy: false }));
+    const script = `
+      import assert from "node:assert/strict";
+      import fs from "node:fs";
+      import path from "node:path";
+      import childProcess from "node:child_process";
+      import { syncBuiltinESMExports } from "node:module";
+      const recordPath = ${JSON.stringify(recordPath)};
+      const writeFile = fs.writeFileSync;
+      let launched = false;
+      fs.writeFileSync = (target, ...args) => {
+        if (launched && typeof target === "string" && path.resolve(target) === recordPath) throw new Error("parent overwrote child state");
+        return writeFile(target, ...args);
+      };
+      childProcess.spawnSync = () => ({ status: 1, stdout: "", stderr: "" });
+      childProcess.spawn = () => {
+        const starting = JSON.parse(fs.readFileSync(recordPath, "utf8"));
+        assert.equal(starting.pausedReason ?? null, null);
+        assert.equal(starting.healthy, false);
+        assert.equal(starting.cmd, "synthetic-bridge");
+        launched = true;
+        // A fast child may be rejected before spawn() returns to its parent.
+        writeFile(recordPath, JSON.stringify({ ...starting, pid: 777, pausedReason: "sdk.upgrade_required", healthy: false }));
+        return { pid: 777, unref() {} };
+      };
+      syncBuiltinESMExports();
+      const { manageDaemonCli } = await import(${JSON.stringify(new URL("../src/daemon.js", import.meta.url).href)});
+      await manageDaemonCli(["restart"], { quiet: true, workdir: ${JSON.stringify(fixtureDir)} });
+      assert.ok(launched);
+      const current = JSON.parse(fs.readFileSync(recordPath, "utf8"));
+      assert.equal(current.pausedReason, "sdk.upgrade_required");
+      assert.equal(current.healthy, false);
+      assert.equal(current.pid, 777);
+    `;
+    const result = spawnSync(process.execPath, ["--input-type=module", "-e", script], {
+      env: { ...process.env, HOME: path.join(fixtureDir, "home"), USERPROFILE: path.join(fixtureDir, "home"), DUALLANE_AGENT_CONFIG_DIR: configDir },
+      encoding: "utf8", timeout: 5000,
+    });
+    assert.equal(result.status, 0, result.stderr);
+  } finally { fs.rmSync(fixtureDir, { recursive: true, force: true }); }
+});
+
 test("daemon generates valid macOS launchd plist with KeepAlive and escaped paths", () => {
   const xml = buildLaunchdPlistXml({
     label: getDaemonServiceLabel("comet"),

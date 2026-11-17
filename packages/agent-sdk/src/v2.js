@@ -91,11 +91,21 @@ export class DualLaneBotV2 {
   }
 
   getMe() { return this.#client.getMe(); }
+  getCapabilities(conversationId) { return this.#client.getCapabilities(conversationId); }
+  createTask(input) { return this.#client.createTask(input); }
+  getTask(taskId) { return this.#client.getTask(taskId); }
+  cancelAgentTask(taskId) { return this.#client.cancelAgentTask(taskId); }
+  getOperation(taskId, operation, key) { return this.#client.getOperation(taskId, operation, key); }
+  forTask(task, options) { return this.#client.forTask(task, options); }
+  getMessage(messageId, options) { return this.#client.getMessage(messageId, options); }
+  listHistory(conversationId, options) { return this.#client.listHistory(conversationId, options); }
+  searchMessages(conversationId, options) { return this.#client.searchMessages(conversationId, options); }
+  listMembers(conversationId) { return this.#client.listMembers(conversationId); }
   listConversations() { return this.#client.listConversations(); }
   getContext(conversationId, limit = 50) { return this.#client.getContext(conversationId, { limit }); }
   getUpdates(afterSequence = 0, limit = 50) { return this.#client.getUpdates({ afterSequence, limit }); }
   sendMessage(conversationId, text, options = {}) { return this.#client.sendMessage({ ...options, conversationId, text }); }
-  editMessage(messageId, plainText) { return this.#client.editMessage(messageId, plainText); }
+  editMessage(messageId, input, options) { return this.#client.editMessage(messageId, input, options); }
   sendFile(conversationId, bytes, fileName, options = {}) { return this.#client.sendFile({ ...options, conversationId, bytes, fileName }); }
   readAttachment(input) { return this.#client.readAttachment(input); }
   sendCard(conversationId, cardDoc, options = {}) { return this.#client.sendCard({ ...options, conversationId, card: cardDoc }); }

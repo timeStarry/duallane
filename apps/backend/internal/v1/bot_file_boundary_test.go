@@ -12,6 +12,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/botgateway"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/files"
+	sdkgate "github.com/timestarry/duallane/apps/backend/internal/workspace/sdkgate"
 )
 
 type unreadBotBody struct{ reads int }
@@ -54,6 +55,7 @@ func TestBotFileAdmissionRejectsBeforeReadingBody(t *testing.T) {
 			req.Body = body
 			req.ContentLength = tc.length
 			req.Header.Set("Authorization", "Bearer dl_bot_synthetic_012345678901234567890123456789")
+			req.Header.Set(sdkgate.SDKVersionHeader, sdkgate.MinimumSDKVersion)
 			rec := httptest.NewRecorder()
 			botFileBoundaryRouter(tc.scopes, uploader).ServeHTTP(rec, req)
 			if rec.Code != tc.status || body.reads != 0 {
@@ -68,6 +70,7 @@ func TestBotFileUploadOnlyAndFailureCleanup(t *testing.T) {
 	router := botFileBoundaryRouter([]string{botgateway.ScopeFilesWrite}, uploader)
 	req := httptest.NewRequest("POST", "/api/bot/v2/conversations/conv_dm_bot_1/files?sendMessage=false&fileName=a.txt", strings.NewReader("hello"))
 	req.Header.Set("Authorization", "Bearer dl_bot_synthetic_012345678901234567890123456789")
+	req.Header.Set(sdkgate.SDKVersionHeader, sdkgate.MinimumSDKVersion)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != 201 || string(uploader.completedBytes) != "hello" || uploader.reservedInput.ByteSize != 5 {
@@ -77,6 +80,7 @@ func TestBotFileUploadOnlyAndFailureCleanup(t *testing.T) {
 	req = httptest.NewRequest("POST", "/api/bot/v2/conversations/conv_dm_bot_1/files?sendMessage=false", io.NopCloser(strings.NewReader("short")))
 	req.ContentLength = 9
 	req.Header.Set("Authorization", "Bearer dl_bot_synthetic_012345678901234567890123456789")
+	req.Header.Set(sdkgate.SDKVersionHeader, sdkgate.MinimumSDKVersion)
 	rec = httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != 400 || uploader.failedUploadID != "upl_bot_test_1" {
