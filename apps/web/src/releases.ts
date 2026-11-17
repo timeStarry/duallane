@@ -13,6 +13,13 @@ export type DualLaneRelease = {
 
 export const DUAL_LANE_RELEASES: DualLaneRelease[] = [
   {
+    version: "1.1.3",
+    releasedAt: "2026-11-17",
+    title: "助手权限与更新稳定性",
+    summary: "保留原有会话和助手使用方式，避免查看助手状态时意外恢复已关闭的授权，并为后续能力更新做好兼容准备。",
+    categories: [{ title: "助手使用", items: ["查看助手状态不会重新开启已关闭的触发与历史读取授权", "保留较大图片交付修复，现有会话与文件继续可用"] }]
+  },
+  {
     version: "1.1.2",
     releasedAt: "2026-11-17",
     title: "智能助手大图片交付修复",
