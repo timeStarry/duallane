@@ -53,6 +53,76 @@ test("daemon run and install require a handler before gateway or service-manager
   }
 });
 
+test("an explicit command migrates retired daemon records unless an agent mode is explicitly requested", () => {
+  const fixtureDir = fs.mkdtempSync(path.join(os.tmpdir(), "dl-daemon-migration-test-"));
+  const configDir = path.join(fixtureDir, "agents");
+  const stateDir = path.join(fixtureDir, "daemons");
+  const recordPath = path.join(stateDir, "default.json");
+  try {
+    saveAgentProfile("default", { url: "http://127.0.0.1:1", token: "dl_bot_test_token_0123456789abcdef0123456789" }, { configDir });
+    fs.mkdirSync(stateDir);
+    const daemonUrl = new URL("../src/daemon.js", import.meta.url).href;
+    for (const oldAgent of ["codex", "claude"]) {
+      for (const action of ["install", "run"]) {
+        fs.writeFileSync(recordPath, JSON.stringify({ agent: oldAgent }));
+        const script = `
+          import fs from "node:fs";
+          import path from "node:path";
+          import childProcess from "node:child_process";
+          import { syncBuiltinESMExports } from "node:module";
+          // Prevent every process-manager, handler, and network side effect.
+          childProcess.spawnSync = () => ({ status: 0, stdout: "", stderr: "" });
+          childProcess.spawn = () => ({ pid: 0, unref() {} });
+          syncBuiltinESMExports();
+          globalThis.fetch = async () => { throw new Error("synthetic network boundary"); };
+          const writeFile = fs.writeFileSync;
+          fs.writeFileSync = (target, content, ...args) => {
+            if (path.resolve(target) === ${JSON.stringify(recordPath)}) {
+              const record = JSON.parse(content);
+              process.stdout.write(JSON.stringify({ agent: record.agent, cmd: record.cmd }));
+              throw new Error("synthetic record boundary");
+            }
+            return writeFile(target, content, ...args);
+          };
+          const { manageDaemonCli } = await import(${JSON.stringify(daemonUrl)});
+          try {
+            await manageDaemonCli([${JSON.stringify(action)}], JSON.parse(process.env.TEST_DAEMON_FLAGS));
+            process.exitCode = 2;
+          } catch (error) {
+            if (error.message !== "synthetic record boundary") {
+              process.stderr.write(error.message);
+              process.exitCode = 1;
+            }
+          }
+        `;
+        for (const explicitAgent of [undefined, "claude"]) {
+          const result = spawnSync(process.execPath, ["--input-type=module", "-e", script], {
+            env: {
+              ...process.env,
+              HOME: path.join(fixtureDir, "home"),
+              USERPROFILE: path.join(fixtureDir, "home"),
+              DUALLANE_AGENT_CONFIG_DIR: configDir,
+              TEST_DAEMON_FLAGS: JSON.stringify({ cmd: "new-handler-command", agent: explicitAgent, workdir: fixtureDir }),
+            },
+            encoding: "utf8",
+            timeout: 5_000,
+          });
+          if (explicitAgent) {
+            assert.equal(result.status, 1, result.stderr);
+            assert.match(result.stderr, /Unsupported --agent/u);
+            assert.equal(result.stdout, "");
+          } else {
+            assert.equal(result.status, 0, result.stderr);
+            assert.deepEqual(JSON.parse(result.stdout), { agent: "cmd", cmd: "new-handler-command" });
+          }
+        }
+      }
+    }
+  } finally {
+    fs.rmSync(fixtureDir, { recursive: true, force: true });
+  }
+});
+
 test("daemon generates valid macOS launchd plist with KeepAlive and escaped paths", () => {
   const xml = buildLaunchdPlistXml({
     label: getDaemonServiceLabel("comet"),

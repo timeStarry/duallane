@@ -177,19 +177,19 @@ test.describe("DualLane v1.0 Shared Workspace Login, Search, File Transfer & 320
 
       // 4. Owner creates a group conversation including Member B
       await pageOwner.getByRole("button", { name: "新建群组" }).click();
-      const createGroupDialog = pageOwner.getByRole("dialog", { name: "新建群组对话" });
+      const createGroupDialog = pageOwner.getByRole("dialog", { name: "新建群聊", exact: true });
       await expect(createGroupDialog).toBeVisible();
       await createGroupDialog
-        .getByPlaceholder("群组名称，例如：产品设计与架构")
+        .getByLabel("群组名称", { exact: true })
         .fill("v1.0 双端实时验收群");
       await createGroupDialog.getByRole("button", { name: /协作成员晓明/ }).click();
       await createGroupDialog.getByRole("button", { name: "创建群组" }).click();
       await expect(createGroupDialog).toBeHidden();
 
-      await pageOwner.getByRole("button", { name: /v1\.0 双端实时验收群/ }).click();
+      await pageOwner.getByRole("complementary", { name: "共享空间对话列表" }).getByRole("button", { name: /v1\.0 双端实时验收群/ }).click();
 
       // Member B sees the newly created group immediately; creation system notice MUST NOT inflate unread badge!
-      const memberGroupBtn = pageMember.getByRole("button", { name: /v1\.0 双端实时验收群/ });
+      const memberGroupBtn = pageMember.getByRole("complementary", { name: "共享空间对话列表" }).getByRole("button", { name: /v1\.0 双端实时验收群/ });
       await expect(memberGroupBtn).toBeVisible();
       await expect(memberGroupBtn.getByTestId("unread-badge")).toHaveCount(0);
 
@@ -318,7 +318,7 @@ test.describe("DualLane v1.0 Shared Workspace Login, Search, File Transfer & 320
       await expect(ownerDeckSwitch).toHaveAttribute("data-active-lane", "workspace");
       await expect(ownerDeckSwitch).toHaveAttribute("data-front-card", "workspace");
       expect(new URL(pageOwner.url()).pathname).toBe("/workspace");
-      await pageOwner.getByRole("button", { name: /v1\.0 双端实时验收群/ }).click();
+      await pageOwner.getByRole("complementary", { name: "共享空间对话列表" }).getByRole("button", { name: /v1\.0 双端实时验收群/ }).click();
       await expect(pageOwner.getByRole("heading", { name: "v1.0 双端实时验收群" })).toBeVisible();
 
       const memberDeckSwitch = pageMember.getByTestId("dual-lane-deck-switch");
@@ -348,8 +348,8 @@ test.describe("DualLane v1.0 Shared Workspace Login, Search, File Transfer & 320
       // Reload pageMember on /workspace so bootstrap runs with directory-visibility isolation, then verify group details shows creator nickname ("timeStarry"), NEVER internal ID ("usr_owner")!
       await pageMember.setViewportSize({ width: 1280, height: 800 });
       await pageMember.reload();
-      await pageMember.getByRole("button", { name: /v1\.0 双端实时验收群/ }).click();
-      await pageMember.getByRole("button", { name: "详情与置顶" }).click();
+      await pageMember.getByRole("complementary", { name: "共享空间对话列表" }).getByRole("button", { name: /v1\.0 双端实时验收群/ }).click();
+      await pageMember.getByRole("button").filter({ has: pageMember.getByRole("heading", { name: "v1.0 双端实时验收群", exact: true }) }).click();
       const memberInspector = pageMember.getByRole("complementary", { name: "对话右侧检查器" });
       await expect(memberInspector).toBeVisible();
       await expect(memberInspector).toContainText("timeStarry");

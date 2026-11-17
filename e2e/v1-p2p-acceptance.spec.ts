@@ -304,31 +304,29 @@ test.describe("DualLane v1.0 P2P Direct Lane, File Transfer, 320px Responsive, A
 
       // Browser A gets ACK "对端已收" for the encrypted file transfer!
       const fileBubbleA = pageA.locator("[data-p2p-message-id]").nth(1);
-      await expect(fileBubbleA).toContainText(secretFileName);
+      await expect(fileBubbleA.getByRole("button", { name: `预览图片 ${secretFileName}` })).toBeVisible();
       await expect(fileBubbleA).toHaveAttribute("data-delivery-status", "delivered", {
         timeout: 10000,
       });
 
       // Browser B renders inline PNG preview AND downloads byte-for-byte identical file!
       const fileBubbleB = pageB.locator("[data-p2p-message-id]").nth(1);
-      await expect(fileBubbleB).toContainText(secretFileName);
       await expect(fileBubbleB.getByRole("button", { name: `预览图片 ${secretFileName}` })).toBeVisible();
 
-      // Open MediaLightbox on Browser B & close via Escape
+      // Download the frameless image from its accessible lightbox controls.
       await fileBubbleB.getByRole("button", { name: `预览图片 ${secretFileName}` }).click();
       const lightbox = pageB.getByRole("dialog", { name: secretFileName });
       await expect(lightbox).toBeVisible();
-      await pageB.keyboard.press("Escape");
-      await expect(lightbox).toBeHidden();
-
       const downloadPromise = pageB.waitForEvent("download");
-      await fileBubbleB.getByRole("button", { name: `下载 ${secretFileName}` }).click();
+      await lightbox.getByRole("button", { name: "下载文件" }).click();
       const download = await downloadPromise;
       expect(download.suggestedFilename()).toBe(secretFileName);
       const dlPath = await download.path();
       expect(dlPath).toBeTruthy();
       const downloadedBytes = await fs.readFile(dlPath!);
       expect(Buffer.compare(downloadedBytes, pngBuffer)).toBe(0);
+      await pageB.keyboard.press("Escape");
+      await expect(lightbox).toBeHidden();
 
       // 7. SVG XSS Defense: Browser B sends an SVG file ("image/svg+xml") -> Browser A MUST NOT render inline <img>, forces safe download card
       const svgPayload = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" onload="window.__xss=1"></svg>', "utf8");
@@ -353,19 +351,74 @@ test.describe("DualLane v1.0 P2P Direct Lane, File Transfer, 320px Responsive, A
       expect(combinedWs.includes(secretText)).toBe(false);
       expect(combinedWs.includes(secretFileName)).toBe(false);
 
-      // Verify localStorage / sessionStorage / IndexedDB contain zero P2P secrets or plaintext
+      // Workspace bootstrap may create its own empty draft DB even for a
+      // guest. Audit actual records rather than forbidding unrelated databases.
       for (const page of [pageA, pageB]) {
-        const storageDump = await page.evaluate(async () => {
-          const ls = JSON.stringify(localStorage);
-          const ss = JSON.stringify(sessionStorage);
-          const dbs = "databases" in indexedDB ? await indexedDB.databases() : [];
-          return { ls, ss, dbCount: dbs.length };
-        });
-        expect(storageDump.ls.includes(keySecret)).toBe(false);
-        expect(storageDump.ls.includes(secretText)).toBe(false);
-        expect(storageDump.ss.includes(keySecret)).toBe(false);
-        expect(storageDump.ss.includes(secretText)).toBe(false);
-        expect(storageDump.dbCount).toBe(0);
+        const audit = await page.evaluate(async ({ tokens, fileBytes }) => {
+          let containsP2PContent = false;
+          let containsP2PFile = false;
+          const seen = new WeakSet<object>();
+          const inspect = async (value: unknown): Promise<void> => {
+            if (typeof value === "string") {
+              containsP2PContent ||= tokens.some(token => value.includes(token));
+              return;
+            }
+            if (!value || typeof value !== "object" || seen.has(value)) return;
+            seen.add(value);
+            const bytes = value instanceof Blob
+              ? new Uint8Array(await value.arrayBuffer())
+              : value instanceof ArrayBuffer
+                ? new Uint8Array(value)
+                : ArrayBuffer.isView(value)
+                  ? new Uint8Array(value.buffer, value.byteOffset, value.byteLength)
+                  : null;
+            if (bytes) {
+              containsP2PFile ||= bytes.length === fileBytes.length && bytes.every((byte, index) => byte === fileBytes[index]);
+              return;
+            }
+            if (Array.isArray(value)) {
+              containsP2PFile ||= value.length === fileBytes.length && value.every((byte, index) => byte === fileBytes[index]);
+              for (const item of value) await inspect(item);
+              return;
+            }
+            const entries = value instanceof Map
+              ? Array.from(value.entries())
+              : value instanceof Set
+                ? Array.from(value.values())
+                : Object.entries(value);
+            for (const entry of entries) await inspect(entry);
+          };
+          await inspect(JSON.stringify(localStorage));
+          await inspect(JSON.stringify(sessionStorage));
+          for (const metadata of await indexedDB.databases()) {
+            if (!metadata.name) continue;
+            const database = await new Promise<IDBDatabase>((resolve, reject) => {
+              const request = indexedDB.open(metadata.name!);
+              request.onsuccess = () => resolve(request.result);
+              request.onerror = () => reject(new Error("Cannot audit browser database"));
+              request.onupgradeneeded = () => {
+                request.transaction?.abort();
+                reject(new Error("Browser database changed during read-only audit"));
+              };
+            });
+            try {
+              for (const storeName of Array.from(database.objectStoreNames)) {
+                const store = database.transaction(storeName, "readonly").objectStore(storeName);
+                const read = (request: IDBRequest<unknown>) => new Promise<unknown>((resolve, reject) => {
+                  request.onsuccess = () => resolve(request.result);
+                  request.onerror = () => reject(new Error("Cannot audit browser database records"));
+                });
+                const records = await Promise.all([read(store.getAllKeys()), read(store.getAll())]);
+                await inspect(records);
+              }
+            } finally {
+              database.close();
+            }
+          }
+          return { containsP2PContent, containsP2PFile };
+        }, { tokens: [keySecret, secretText, secretFileName], fileBytes: Array.from(pngBuffer) });
+        expect(audit.containsP2PContent).toBe(false);
+        expect(audit.containsP2PFile).toBe(false);
       }
 
       // 9. Browser B disconnects -> Browser A immediately reflects peer departure

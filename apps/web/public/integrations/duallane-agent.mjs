@@ -3038,7 +3038,11 @@ export async function runResidentDaemon(flags = {}) {
 
   const savedCfg = readDaemonRecord(profileName) || {};
   const customCmd = typeof flags.cmd === "string" ? flags.cmd.trim() : (savedCfg.cmd || "");
-  const requestedAgent = String(flags.agent || savedCfg.agent || (customCmd ? "cmd" : "auto")).trim();
+  const requestedAgent = String(
+    flags.agent ||
+    (typeof flags.cmd === "string" && flags.cmd.trim() ? "cmd" : savedCfg.agent) ||
+    (customCmd ? "cmd" : "auto")
+  ).trim();
   const agentMode = detectAvailableAgentBinary(requestedAgent);
   if (!customCmd) {
     throw new TypeError("Resident daemons require --cmd <command>; no agent executable is selected automatically.");
@@ -3446,7 +3450,9 @@ export async function manageDaemonCli(positionals = [], flags = {}) {
     const prev = readDaemonRecord(profileName) || {};
     const customCmd = typeof flags.cmd === "string" ? flags.cmd.trim() : (prev.cmd || "");
     const agentMode = detectAvailableAgentBinary(
-      flags.agent || prev.agent || (customCmd ? "cmd" : "auto")
+      flags.agent ||
+      (typeof flags.cmd === "string" && flags.cmd.trim() ? "cmd" : prev.agent) ||
+      (customCmd ? "cmd" : "auto")
     );
     if (!customCmd) {
       throw new TypeError("Resident daemons require --cmd <command>; no agent executable is selected automatically.");
