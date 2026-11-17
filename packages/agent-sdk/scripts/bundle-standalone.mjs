@@ -103,6 +103,7 @@ const manifestPayload =
       buildId: crypto.createHash("sha256").update(sections.join("\n")).digest("hex"),
       compatibility: { gatewayVersion: 1, bridgeProtocolVersion: 1 },
       highlights: [
+        "恢复机器人执行期间的思考状态，任务结束、失败或取消后停止续租",
         "通用命令桥接采用版本化任务与产物协议，支持受控媒体获取和授权入站附件",
         "任务持久接收后确认事件，按上传与发送回执恢复，并提供安全失败状态和显式重试",
         "官方运行包按版本、摘要和协议核验更新，保留独立bridge、策略和服务配置",

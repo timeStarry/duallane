@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import { LiteWebSocket, OPEN } from "./ws-lite.js";
 import { requestGateway, readGatewayBytes } from "./transport.js";
 
-export const DUALLANE_AGENT_SDK_VERSION = "1.1.0";
+export const DUALLANE_AGENT_SDK_VERSION = "1.1.1";
 export const DUALLANE_GATEWAY_VERSION = 1;
 
 export function compareRuntimeSemver(a, b) {
@@ -260,10 +260,11 @@ export class DualLaneAgentClient {
   async setTyping(conversationId, options = {}) {
     const id = normalizeId(conversationId, "conversationId");
     const state = typeof options.state === "string" ? options.state.trim() : "";
+    const request = { signal: options.signal, timeoutMs: options.timeoutMs };
     if (state === "typing" || state === "thinking") {
-      return this.#request("POST", "/api/bot/v2/typing", { conversationId: id, state });
+      return this.#request("POST", "/api/bot/v2/typing", { conversationId: id, state }, request);
     }
-    return this.#request("POST", "/api/bot-gateway/v1/typing", { conversationId: id });
+    return this.#request("POST", "/api/bot-gateway/v1/typing", { conversationId: id }, request);
   }
 
   async unbind() {

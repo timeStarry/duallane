@@ -32,6 +32,109 @@ const event = (id = "event", conversationId = "c") => ({ eventId: id, sequence: 
 const document = (extra = {}) => JSON.stringify({ protocol: "duallane.agent.result", version: 1, status: "completed", text: "report", artifacts: [
   { id: "report", source: "inline", fileName: "report.txt", mimeType: "text/plain", encoding: "utf8", data: "synthetic document" }], ...extra });
 
+test("thinking starts only for executing work, renews its lease and stops after publication", async (t) => {
+  const heartbeats = [], started = [];
+  let finishFirst;
+  const f = fixture({ async invoke(request) {
+    started.push(request.event.eventId);
+    if (started.length === 1) await new Promise((resolve) => { finishFirst = resolve; });
+    return "answer";
+  }, client: { async setTyping(conversationId, options) { heartbeats.push({ conversationId, ...options }); } } });
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  try {
+    f.runtime.accept(event("first")); f.runtime.accept(event("queued"));
+    assert.equal(heartbeats.length, 0);
+    f.runtime.start(); await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(started, ["first"]);
+    assert.equal(heartbeats.length, 1);
+    assert.equal(heartbeats[0].state, "thinking");
+    assert.equal(heartbeats[0].timeoutMs, 3000);
+    t.mock.timers.tick(3800); await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(heartbeats.length, 2);
+    finishFirst(); await f.runtime.idle();
+    assert.deepEqual(started, ["first", "queued"]);
+    assert.equal(heartbeats.length, 3);
+    assert.ok(heartbeats.every((heartbeat) => heartbeat.signal.aborted));
+    t.mock.timers.tick(7600); await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(heartbeats.length, 3);
+    assert.equal(f.calls.sends.length, 2);
+  } finally { await f.cleanup(); t.mock.timers.reset(); }
+});
+
+test("thinking requests never overlap and abort on cancellation or shutdown", async (t) => {
+  for (const action of ["cancel", "close"]) {
+    const heartbeats = [];
+    const f = fixture({ invoke(_request, { signal }) {
+      return new Promise((_resolve, reject) => signal.addEventListener("abort", () => reject(new Error("stopped")), { once: true }));
+    }, client: { setTyping(conversationId, options) {
+      heartbeats.push({ conversationId, ...options });
+      return new Promise((_resolve, reject) => options.signal.addEventListener("abort", () => reject(new Error("private transport details")), { once: true }));
+    } } });
+    t.mock.timers.enable({ apis: ["setInterval"] });
+    try {
+      const { taskId } = f.runtime.accept(event()); f.runtime.start();
+      await new Promise((resolve) => setImmediate(resolve));
+      t.mock.timers.tick(7600); await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(heartbeats.length, 1);
+      if (action === "cancel") { f.runtime.cancel(taskId); await f.runtime.idle(); }
+      else await f.runtime.close();
+      assert.equal(heartbeats[0].signal.aborted, true);
+      assert.equal(f.runtime.getTask(taskId).state, action === "cancel" ? "cancelled" : "received");
+      t.mock.timers.tick(7600); await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(heartbeats.length, 1); assert.equal(f.calls.sends.length, 0);
+    } finally { await f.cleanup(); t.mock.timers.reset(); }
+  }
+});
+
+test("thinking failures are advisory and unauthorized tasks do not announce work", async () => {
+  for (const denied of [false, true]) {
+    let heartbeats = 0;
+    const f = fixture({ client: {
+      async setTyping() { heartbeats++; throw new Error("private token/path"); },
+      ...(denied ? { async listConversations() { return { conversations: [] }; } } : {}),
+    } });
+    try {
+      const { taskId } = f.runtime.accept(event()); f.runtime.start(); await f.runtime.idle();
+      assert.equal(f.runtime.getTask(taskId).state, denied ? "failed" : "completed");
+      assert.equal(heartbeats, denied ? 0 : 1);
+      assert.equal(f.calls.invoke, denied ? 0 : 1);
+    } finally { await f.cleanup(); }
+  }
+});
+
+test("model, upload and send failures all stop thinking lease renewal", async (t) => {
+  for (const stage of ["model", "upload", "send"]) {
+    const heartbeats = [];
+    const fail = () => { throw Object.assign(new Error("private failure detail"), { code: "test.denied", statusCode: 403 }); };
+    const f = fixture({ invoke: stage === "model" ? fail : async () => document(), client: {
+      async setTyping(_conversationId, options) { heartbeats.push(options); },
+      ...(stage === "upload" ? { uploadFile: fail } : {}),
+      ...(stage === "send" ? { sendMessage: fail } : {}),
+    } });
+    t.mock.timers.enable({ apis: ["setInterval"] });
+    try {
+      const { taskId } = f.runtime.accept(event()); f.runtime.start(); await f.runtime.idle();
+      assert.equal(f.runtime.getTask(taskId).state, "failed");
+      assert.equal(heartbeats.length, 1); assert.equal(heartbeats[0].signal.aborted, true);
+      t.mock.timers.tick(7600); await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(heartbeats.length, 1);
+    } finally { await f.cleanup(); t.mock.timers.reset(); }
+  }
+});
+
+test("typing HTTP requests respect their advisory deadline and cancellation signal", async () => {
+  const signals = [];
+  const client = new DualLaneAgentClient({ url: "https://example.com", token: `dl_bot_${"t".repeat(32)}`,
+    async fetch(_url, init) { signals.push(init.signal); return new Promise(() => {}); } });
+  await assert.rejects(client.setTyping("c", { state: "thinking", timeoutMs: 15 }), { code: "network.timeout" });
+  assert.equal(signals[0].aborted, true);
+  const controller = new AbortController();
+  const pending = client.setTyping("c", { state: "thinking", signal: controller.signal });
+  controller.abort();
+  await assert.rejects(pending, { code: "sdk.aborted" });
+  assert.equal(signals[1].aborted, true);
+});
+
 test("durable acceptance precedes work; duplicates survive restart without another invocation", async () => {
   const f = fixture();
   try {
