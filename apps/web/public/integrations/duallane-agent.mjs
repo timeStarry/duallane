@@ -353,7 +353,7 @@ export function sdkUpgradeInfo(input = {}, origin) {
     } catch { /* Only fixed, same-origin upgrade resources are trusted. */ }
     return new URL(fallback, base).href;
   };
-  const version = (value) => /^1\.(?:0|[1-9]\d{0,5})\.(?:0|[1-9]\d{0,5})$/u.test(value || "") ? value : "1.2.0";
+  const version = (value) => /^1\.(?:0|[1-9]\d{0,5})\.(?:0|[1-9]\d{0,5})$/u.test(value || "") ? value : "1.2.1";
   return Object.freeze({
     minimumSdkVersion: version(input.minimumSdkVersion), latestSdkVersion: version(input.latestSdkVersion),
     runtimeManifestUrl: integrationUrl(input.runtimeManifestUrl, "/integrations/duallane-agent.manifest.json", ["/integrations/duallane-agent.manifest.json", "/integrations/v2/duallane-agent.manifest.json"]),

@@ -13,7 +13,7 @@ import { getDaemonStateDir } from "../src/daemon.js";
 import { loadAgentProfile, saveAgentProfile } from "../src/profile-store.js";
 
 const token = `dl_bot_${"u".repeat(32)}`;
-const upgrade = { error: { code: "sdk.upgrade_required", minimumSdkVersion: "1.2.0", latestSdkVersion: "1.2.0",
+const upgrade = { error: { code: "sdk.upgrade_required", minimumSdkVersion: "1.2.1", latestSdkVersion: "1.2.1",
   runtimeManifestUrl: "/integrations/duallane-agent.manifest.json", docsUrl: "/integrations/v2/duallane-channel.md", skillUrl: "/integrations/duallane-agent/SKILL.md" } };
 const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 const makeClient = (fetch, more = {}) => new DualLaneAgentClient({ url: "https://gateway.example", token, fetch, ...more });
@@ -58,7 +58,7 @@ test("426 is terminal, does not retain server secrets or attacker upgrade URLs, 
   const payload = { error: { ...upgrade.error, message: token, minimumSdkVersion: token, runtimeManifestUrl: `https://attacker.example/${token}`, docsUrl: `/${token}`, skillUrl: `//attacker.example/${token}` } };
   await assert.rejects(makeClient(async () => json(payload, 426)).getMe(), (error) => {
     assert.equal(error.code, "sdk.upgrade_required"); assert.equal(error.retryable, false); assert.equal(error.statusCode, 426);
-    assert.equal(error.upgrade.minimumSdkVersion, "1.2.0");
+    assert.equal(error.upgrade.minimumSdkVersion, "1.2.1");
     for (const value of Object.values(error.upgrade).filter((item) => item.startsWith("https:"))) assert.ok(value.startsWith("https://gateway.example/integrations/"));
     assert.ok(!JSON.stringify(error).includes(token)); assert.ok(!error.message.includes(token)); return true;
   });

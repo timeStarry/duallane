@@ -263,7 +263,7 @@ func TestBotGatewayRoutesAuthenticateAndForwardRESTRequests(t *testing.T) {
 }
 
 func TestBotGatewayCredentialRoutesRequireCurrentSDK(t *testing.T) {
-	for _, version := range []string{"", "1.1.9", "not-a-version", "2.0.0"} {
+	for _, version := range []string{"", "1.1.9", "1.2.0", "not-a-version", "2.0.0"} {
 		t.Run("version-"+strings.ReplaceAll(version, ".", "_"), func(t *testing.T) {
 			gateway := &botGatewayRouteFake{}
 			setup := &botGatewaySetupRouteFake{}
@@ -283,13 +283,22 @@ func TestBotGatewayCredentialRoutesRequireCurrentSDK(t *testing.T) {
 		})
 	}
 
-	setup := &botGatewaySetupRouteFake{}
-	router := newBotGatewayRouteTestRouter(nil, setup, true)
-	request := httptest.NewRequest(http.MethodGet, "/api/bot-gateway/v1/setup/status?setupSessionId=setup_1234567890123456", nil)
-	response := httptest.NewRecorder()
-	router.ServeHTTP(response, request)
-	if response.Code != http.StatusUpgradeRequired || setup.statusInput.SetupID != "" {
-		t.Fatalf("setup without SDK declaration reached service: status=%d body=%s input=%#v", response.Code, response.Body.String(), setup.statusInput)
+	for _, version := range []string{"", "1.2.0"} {
+		for _, route := range []struct{ method, path string }{
+			{http.MethodGet, "/api/bot-gateway/v1/setup/status?setupSessionId=setup_1234567890123456"},
+			{http.MethodPost, "/api/bot-gateway/v1/setup/request"},
+			{http.MethodPost, "/api/bot-gateway/v1/setup/exchange"},
+		} {
+			setup := &botGatewaySetupRouteFake{}
+			router := newBotGatewayRouteTestRouter(nil, setup, true)
+			request := httptest.NewRequest(route.method, route.path, nil)
+			request.Header.Set(sdkgate.SDKVersionHeader, version)
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, request)
+			if response.Code != http.StatusUpgradeRequired || setup.statusInput.SetupID != "" || setup.requestInput.SetupID != "" || setup.exchangeInput.SetupID != "" {
+				t.Fatalf("setup %s with SDK %q reached service: status=%d body=%s", route.path, version, response.Code, response.Body.String())
+			}
+		}
 	}
 }
 

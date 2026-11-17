@@ -142,15 +142,17 @@ files. Credentials are reused; updating never requires automatic re-pairing.
 
 App 1.2 enforces SDK admission for every Bot, independently of access-policy
 version. All setup, Bot HTTP and WebSocket requests declare
-`X-DualLane-SDK-Version`; only compatible stable 1.x versions at least 1.2.0 are
-accepted. Missing/invalid/older/incompatible declarations return 426
+`X-DualLane-SDK-Version`; only compatible stable 1.x versions at least 1.2.1 are
+accepted. The admission floor follows the published SDK release, including patch
+releases: older SDKs must upgrade, with no legacy compatibility window.
+Missing/invalid/older/incompatible declarations return 426
 `sdk.upgrade_required` with safe upgrade locations. The runtime stops retries
 and requires a verified update while preserving its profile, bridge and policy.
 The declaration is public compatibility metadata, never identity or authority;
 current authentication, scopes, task and object checks remain mandatory.
 Human Session APIs, public downloads, health checks and P2P do not use this gate.
 WebSocket adapters may declare the same version through the public subprotocol
-`duallane-agent-sdk-1.2.0`; conflicts and duplicate declarations fail closed.
+`duallane-agent-sdk-1.2.1`; conflicts and duplicate declarations fail closed.
 Bot authentication remains mandatory and credentials never move to URLs.
 
 Implementation order: transport/authorization regressions; structured task and

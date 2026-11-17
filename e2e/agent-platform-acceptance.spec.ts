@@ -454,7 +454,7 @@ test("real SDK task HTTP roundtrip reads history, publishes mixed files, edits w
     // Never attach the token response, log credentials or persist a profile.
     tokenId = requiredString(asRecord(issued.tokenRecord, "issued token record").id, "issued token id");
     const credential = requiredString(issued.token, "issued Bot credential");
-    for (const version of [undefined, "1.1.3", "invalid", "1.2.0-beta.1", "2.0.0"]) {
+    for (const version of [undefined, "1.1.3", "1.2.0", "invalid", "1.2.0-beta.1", "2.0.0"]) {
       const response = await fetch(new URL("/api/bot-gateway/v1/me", baseURL!), {
         headers: { authorization: `Bearer ${credential}`, ...(version === undefined ? {} : { "X-DualLane-SDK-Version": version }) },
         redirect: "error", signal: AbortSignal.timeout(10_000),
@@ -462,7 +462,7 @@ test("real SDK task HTTP roundtrip reads history, publishes mixed files, edits w
       expect(response.status, `SDK declaration ${version ?? "missing"} must be rejected`).toBe(426);
       const error = asRecord(asRecord(await response.json(), "upgrade response").error, "upgrade requirement");
       expect(error.code).toBe("sdk.upgrade_required");
-      expect(error.minimumSdkVersion).toBe("1.2.0"); expect(error.latestSdkVersion).toBe("1.2.1");
+      expect(error.minimumSdkVersion).toBe("1.2.1"); expect(error.latestSdkVersion).toBe("1.2.1");
       expect(error.runtimeManifestUrl).toBe("/integrations/duallane-agent.manifest.json");
       expect(error.docsUrl).toBe("/integrations/v2/duallane-channel.md"); expect(error.skillUrl).toBe("/integrations/duallane-agent/SKILL.md");
     }

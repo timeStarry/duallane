@@ -30,6 +30,7 @@ describe("versioned Agent integration assets", () => {
     expect(backendModel).toContain("const LatestAgentSDKVersion = sdkgate.LatestSDKVersion");
     const advertisedSDKVersion = admission.match(/LatestSDKVersion\s*=\s*"([^"]+)"/u)?.[1];
     expect(advertisedSDKVersion).toBe(sdkPackage.version);
+    expect(admission).toMatch(/MinimumSDKVersion\s*=\s*LatestSDKVersion/u);
     const publications = [];
     for (const prefix of ["", "v2"]) {
       const directory = path.join(publicRoot, prefix);
@@ -38,6 +39,7 @@ describe("versioned Agent integration assets", () => {
       expect(manifest).toMatchObject({
         name: sdkPackage.name,
         version: sdkPackage.version,
+        compatibility: { minimumSdkVersion: sdkPackage.version },
         downloadPath: "/integrations/duallane-agent.mjs"
       });
       expect(manifest.minNodeVersion).toMatch(/^\d+\.\d+\.\d+$/u);

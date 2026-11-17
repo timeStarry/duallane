@@ -26,8 +26,10 @@ An update must not overwrite a modified or unregistered executable. The official
 updater verifies the manifest, syntax, compatibility and installed-file receipt;
 it records content drift even when the semantic version is unchanged.
 
-The server requires a compatible stable 1.x SDK, minimum `1.2.0`, for every
+The server requires a compatible stable 1.x SDK, minimum `1.2.1`, for every
 Agent connection, including Bots retaining legacy access-policy settings.
+The minimum follows the published release, including patches. Older runtimes
+must upgrade; there is no legacy compatibility window.
 The official runtime sends `X-DualLane-SDK-Version: 1.2.1` on setup, authenticated
 HTTP calls and WebSocket handshakes. Missing, malformed, older or incompatible
 versions are rejected with HTTP `426` and `sdk.upgrade_required`; the response

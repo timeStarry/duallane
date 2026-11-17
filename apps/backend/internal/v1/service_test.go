@@ -720,7 +720,7 @@ func TestBotV2CredentialRoutesRejectUnsupportedSDKBeforeBusinessWork(t *testing.
 	})
 	r := chi.NewRouter()
 	h.Mount(r)
-	for _, version := range []string{"", "1.1.9", "invalid", "2.0.0"} {
+	for _, version := range []string{"", "1.1.9", "1.2.0", "invalid", "2.0.0"} {
 		t.Run("version-"+strings.ReplaceAll(version, ".", "_"), func(t *testing.T) {
 			request := httptest.NewRequest(http.MethodGet, "/api/bot/v2/doctor", nil)
 			request.Header.Set("Authorization", "Bearer "+validToken)

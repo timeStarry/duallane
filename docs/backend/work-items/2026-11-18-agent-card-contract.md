@@ -49,8 +49,12 @@ global settings and approval policy remain owned by its original chat.
 
 ## Release and rollback
 
-App and SDK target1.2.1; minimum SDK admission remains1.2.0 because the transport
-contract is compatible. Publish both runtime manifests and exact digests with
+App and SDK target 1.2.1. Per the maintainer's mandatory-update policy, minimum
+SDK admission also becomes 1.2.1: 1.2.0 and earlier are refused at setup, every
+credentialed HTTP request and WebSocket handshake with actionable HTTP426 guidance.
+The floor follows the published release, including patches; the declared version
+does not replace authentication or authorization. Deploy drains existing sockets,
+so an old runtime cannot retain a connection across activation. Publish both runtime manifests and exact digests with
 the reviewed PR. Production activation, if selected under the existing release
 instruction, uses the guarded main checkout and the current1.2.0/schema37 recovery
 snapshot. No schema bridge or database restore is required. Final gate and
