@@ -25,16 +25,20 @@ test("Node online code and image are retired while canonical SQL and browser too
   }
   assert.ok(web.dependencies.vite && web.dependencies.react && web.dependencies.unified);
   const sql = await readdir(path.join(root, "apps/web/server/migrations"));
-  assert.equal(sql.filter(name => name.endsWith(".sql")).length, 36);
+  assert.equal(sql.filter(name => name.endsWith(".sql")).length, 37);
   assert.ok(sql.includes("034_workspace_chat_auto_hide.sql"));
   assert.ok(sql.includes("035_mobile_sessions.sql"));
   assert.ok(sql.includes("036_v1_clean_architecture.sql"));
+  assert.ok(sql.includes("037_agent_task_authorization.sql"));
   const canonicalMobileMigration = await readFile(path.join(root, "apps/web/server/migrations/035_mobile_sessions.sql"));
   const reviewedMobileFixture = await readFile(path.join(root, "apps/backend/internal/platform/migrations/testdata/035_mobile_sessions.sql"));
   assert.deepEqual(canonicalMobileMigration, reviewedMobileFixture, "activated mobile migration must preserve the reviewed bridge fixture bytes");
   const canonicalV1Migration = await readFile(path.join(root, "apps/web/server/migrations/036_v1_clean_architecture.sql"));
   const reviewedV1Fixture = await readFile(path.join(root, "apps/backend/internal/platform/migrations/testdata/036_v1_clean_architecture.sql"));
   assert.deepEqual(canonicalV1Migration, reviewedV1Fixture, "activated v1 clean architecture migration must preserve the reviewed bridge fixture bytes");
+  const canonicalAgentMigration = await readFile(path.join(root, "apps/web/server/migrations/037_agent_task_authorization.sql"));
+  const reviewedAgentFixture = await readFile(path.join(root, "apps/backend/internal/platform/migrations/testdata/037_agent_task_authorization.sql"));
+  assert.deepEqual(canonicalAgentMigration, reviewedAgentFixture, "activated Agent migration must preserve the reviewed bridge fixture bytes");
   await access(path.join(root, "packages/agent-sdk/package.json"));
 });
 
