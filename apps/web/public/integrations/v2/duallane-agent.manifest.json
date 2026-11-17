@@ -1,17 +1,18 @@
 {
   "name": "@duallane/agent-sdk",
-  "version": "1.1.1",
-  "sha256": "d2d7d28ab8686e9a8008e57804d15a96e2e378b5e41af3e116392fbe5e607fa0",
-  "byteSize": 242102,
+  "version": "1.1.2",
+  "sha256": "1ee596806486ebdf45ed94c82225d80375bdfaf1e2b9718afb4fcf5b5b75ef5b",
+  "byteSize": 246158,
   "downloadPath": "/integrations/duallane-agent.mjs",
   "documentationPath": "/integrations/v2/duallane-channel.md",
   "minNodeVersion": "20.0.0",
-  "buildId": "36452fc51f859e09b3641b895048be63734edf88a51e3719f47153fb9197d4dd",
+  "buildId": "008a3441e3c4ff3a6f24681ca7873f8e4a7cff402c3c7d87de1cfb23c190eee0",
   "compatibility": {
     "gatewayVersion": 1,
     "bridgeProtocolVersion": 1
   },
   "highlights": [
+    "修复较大图片内联编码触发解析失败，严格校验编码和文件大小边界",
     "恢复机器人执行期间的思考状态，任务结束、失败或取消后停止续租",
     "通用命令桥接采用版本化任务与产物协议，支持受控媒体获取和授权入站附件",
     "任务持久接收后确认事件，按上传与发送回执恢复，并提供安全失败状态和显式重试",

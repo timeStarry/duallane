@@ -87,6 +87,16 @@ procedure, not an automatic response to a busy lock.
 
 ## Structured files, inputs and memory (SDK 1.1)
 
+SDK 1.1.2 fixes stack exhaustion while validating large inline Base64 artifacts
+and SVG prefixes. Bridge output still allows at most six artifacts, 25 MiB per
+file, 50 MiB cumulatively and 70 MiB of stdout JSON. Base64 must be canonical
+standard RFC 4648 with required padding and zero unused trailing bits; invalid
+characters, whitespace and URL-safe substitutions are refused. Direct file
+uploads retain their separate 50 MiB limit and server authorization/quota checks.
+Update every parser dependency, including legacy-tag adapters importing an
+older standalone bundle, as well as the executing daemon. Existing failed tasks
+are not automatically retried or resent by this fix.
+
 Use the [task and artifact contract](../../docs/WORKSPACE_AGENT_RUNTIME_CONTRACT.md)
 for the complete request/result schemas, capability matrix and trust boundaries.
 For example, a command bridge can return:

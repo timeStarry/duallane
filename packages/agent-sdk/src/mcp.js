@@ -1,5 +1,6 @@
-import fs from "node:fs";
 import path from "node:path";
+import { decodeArtifactBase64 } from "./base64.js";
+import { AGENT_DIRECT_FILE_MAX_BYTES, normalizeFileBytes, readBoundedFile } from "./file-input.js";
 import {
   DualLaneAgentClient,
   DualLaneAgentError,
@@ -550,15 +551,15 @@ export function createDualLaneMcpServer(options = {}) {
         let resolvedName = typeof args.fileName === "string" ? args.fileName.trim() : "";
         if (typeof args.filePath === "string" && args.filePath.trim()) {
           const full = path.resolve(args.filePath.trim());
-          rawBytes = fs.readFileSync(full);
+          rawBytes = readBoundedFile(full);
           if (!resolvedName) {
             resolvedName = path.basename(full);
           }
         } else if (typeof args.contentBase64 === "string" && args.contentBase64.trim()) {
           const cleanedB64 = args.contentBase64.trim().replace(/^data:[^;]+;base64,/iu, "");
-          rawBytes = Buffer.from(cleanedB64, "base64");
+          rawBytes = decodeArtifactBase64(cleanedB64, { maxBytes: AGENT_DIRECT_FILE_MAX_BYTES });
         } else if (typeof args.contentText === "string" && args.contentText.length > 0) {
-          rawBytes = Buffer.from(args.contentText, "utf8");
+          rawBytes = normalizeFileBytes(args.contentText);
         } else {
           throw new TypeError("One of filePath, contentText, or contentBase64 is required for duallane_send_file");
         }
