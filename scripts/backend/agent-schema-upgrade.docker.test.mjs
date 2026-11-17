@@ -22,6 +22,7 @@ const imagePattern = /^sha256:[0-9a-f]{64}$/u;
 const containerPattern = /^[0-9a-f]{64}$/u;
 const selected = process.env.DUALLANE_AGENT_SCHEMA_UPGRADE_DOCKER_TEST === "true";
 const services = ["p2p", "workspace", "worker", "web"];
+const initializationService = "fixture-init";
 const childEnvironment = () => ({ PATH: process.env.PATH, HOME: process.env.HOME,
   DOCKER_HOST: "unix:///var/run/docker.sock", COMPOSE_DISABLE_ENV_FILE: "1" });
 const fail = (code) => { throw new Error(code); };
@@ -78,8 +79,16 @@ function goOnlyCompose(options) {
   return compose;
 }
 
+function initializationLabels(project, runID) {
+  // A bridge image may have inherited Compose labels from its source owner.
+  // Override the role as well as project/run so this stopped utility cannot be
+  // mistaken for a second worker by the production volume-authority verifier.
+  return { [ownerLabel]: runID, "com.docker.compose.project": project,
+    "com.docker.compose.service": initializationService };
+}
+
 function bootstrapScript(source) {
-  return ["set -Eeuo pipefail", "umask 077", 'source "$ROOT/deploy/production/release-helper.sh"',
+  return ["set -Eeuo pipefail", "umask 077", `trap 'printf "coordinator_function_%s_line_%s\\n" "${"${FUNCNAME[0]:-main}"}" "$LINENO" >&2' ERR`, 'source "$ROOT/deploy/production/release-helper.sh"',
     ...["verify_container_release", "start_release_service", "start_release_edge"].map((name) => extractFunction(source, name)),
     'compose() { local files=(-f "${RELEASE_GO_ACTIVATION_COMPOSE_FILE:-$GO_COMPOSE}"); if [[ -z "$RELEASE_GO_ACTIVATION_COMPOSE_FILE" && -n "$RELEASE_GO_IMAGE_OVERRIDE_FILE" ]]; then files+=(-f "$RELEASE_GO_IMAGE_OVERRIDE_FILE"); fi; docker compose --project-name "$PROJECT" "${files[@]}" "$@"; }',
     'PROJECT_DIR=$ROOT; COMPOSE_PROJECT_NAME=$PROJECT; export COMPOSE_PROJECT_NAME; current_commit=$GO_COMMIT; expected_app_version=$GO_VERSION',
@@ -138,8 +147,10 @@ async function runCoordinator(script, environment) {
       if (bytes > 1024 * 1024) terminate("coordinator_output_limit");
       if (stream === child.stderr && bytes <= 1024 * 1024) errors += chunk.toString("utf8");
       for (const match of chunk.toString("utf8").matchAll(/\b([A-Za-z_][A-Za-z0-9_]*): unbound variable\b/gu)) codes.add(`unbound_${match[1]}`);
+      for (const match of chunk.toString("utf8").matchAll(/\bcoordinator_line_[0-9]+\b/gu)) codes.add(match[0]);
+      for (const match of chunk.toString("utf8").matchAll(/\bcoordinator_function_[A-Za-z0-9_]+_line_[0-9]+\b/gu)) codes.add(match[0]);
       // Keep fixed diagnostic codes, never application bodies/configuration.
-      for (const match of chunk.toString("utf8").matchAll(/^release [a-z ]+ rejected: ([a-z_]+)$/gmu)) codes.add(match[1]);
+      for (const match of chunk.toString("utf8").matchAll(/^release[ -][a-z -]+ rejected: ([a-z_]+)$/gmu)) codes.add(match[1]);
     });
     child.once("error", () => { clearTimeout(timer); clearTimeout(killTimer); reject(new Error("coordinator_spawn_failed")); });
     child.once("close", (status) => {
@@ -240,6 +251,11 @@ test("Go-only agent upgrade rejects mutable image inputs and drops the retired s
     root, secretPath: path.join(os.tmpdir(), "synthetic-secret.json"), port: 23456 });
   assert.deepEqual(Object.keys(compose.services).sort(), ["migrate", "p2p", "postgres", "web", "worker", "workspace"]);
   assert.ok(Object.values(compose.services).every((service) => service.image === image));
+  const labels = { "com.docker.compose.project": "original", "com.docker.compose.service": "worker",
+    ...initializationLabels("dl-agent-schema-test", "synthetic-run") };
+  assert.equal(labels["com.docker.compose.project"], "dl-agent-schema-test");
+  assert.equal(labels["com.docker.compose.service"], "fixture-init");
+  assert.equal(services.includes(labels["com.docker.compose.service"]), false);
 });
 
 test("pre-existing crash-loop exception requires one exact running baseline identity", () => {
@@ -313,11 +329,17 @@ test("immutable Go images upgrade schema 036 to 037 and restore old Go on the sa
       assert.equal(docker(["volume", "create", "--label", `${ownerLabel}=${runID}`, "--label", `com.docker.compose.project=${project}`, "--label", `com.docker.compose.volume=${logical}`, name]).stdout.trim(), name);
     }
     phase = "permissions";
-    const initID = docker(["create", "--pull=never", "--network", "none", "--user", "0:0", "--label", `${ownerLabel}=${runID}`, "--label", `com.docker.compose.project=${project}`,
+    const initLabels = Object.entries(initializationLabels(project, runID)).flatMap(([key, value]) => ["--label", `${key}=${value}`]);
+    const initID = docker(["create", "--pull=never", "--network", "none", "--user", "0:0", ...initLabels,
       "--mount", `type=volume,source=${names.dataVolume},target=/app/data`, "--entrypoint", "/bin/sh", images.old.goWorkspace, "-c",
       "mkdir -p /app/data/workspace-files && chown 65532:65532 /app/data /app/data/workspace-files && chmod 0770 /app/data /app/data/workspace-files"]).stdout.trim();
     if (!containerPattern.test(initID)) fail("permission_container_identity_invalid");
-    docker(["start", "--attach", initID]); assert.equal(inspect("container", initID).State.ExitCode, 0);
+    docker(["start", "--attach", initID]);
+    const initialized = inspect("container", initID);
+    if (initialized.Id !== initID || initialized.Image !== images.old.goWorkspace || initialized.Config?.Labels?.[ownerLabel] !== runID ||
+        initialized.Config?.Labels?.["com.docker.compose.project"] !== project || initialized.Config?.Labels?.["com.docker.compose.service"] !== initializationService ||
+        initialized.State.Running || initialized.State.ExitCode !== 0) fail("permission_initialization_unverified");
+    docker(["rm", initID]);
     const base = ["compose", "--project-name", project, "-f", paths.old];
     phase = "postgres";
     docker([...base, "up", "-d", "--no-deps", "--pull", "never", "--no-build", "--wait", "--wait-timeout", "60", "postgres"], { timeout: 75_000 });
@@ -343,7 +365,30 @@ test("immutable Go images upgrade schema 036 to 037 and restore old Go on the sa
     assertHealthy(ownedContainers(project, runID, allowed), expectedOld, pgID, names);
     schemaState(pgID, 37);
     t.diagnostic("real Go-only 036→037 activation, private exact-image snapshots and old-Go recovery on unchanged PostgreSQL authority passed");
-  } catch (error) { primary = new Error(`agent_schema_${phase}: ${/^[a-zA-Z0-9_ :.-]+$/u.test(error.message) ? error.message : "check_failed"}`); }
+  } catch (error) {
+    primary = new Error(`agent_schema_${phase}: ${/^[a-zA-Z0-9_ :.-]+$/u.test(error.message) ? error.message : "check_failed"}`);
+    // Diagnose only the synthetic fixture's authority. Raw Docker inspect,
+    // environments, filenames and application logs never enter test output.
+    try {
+      const composePath = `${paths.oldRecovery}.go-compose.snapshot.json.compose.json`;
+      const compose = JSON.parse(await readFile(composePath, "utf8"));
+      t.diagnostic(JSON.stringify({ stage: "authority_fixture", projectMatches: compose.name === project }));
+      const { captureVolumeAuthority, createDockerRunner } = await import("../../deploy/production/release-volume-authority.mjs");
+      const run = createDockerRunner();
+      await captureVolumeAuthority({ composePath, outputPath: path.join(directory, "diagnostic-volume.json"), dockerRunner: async (args, stage) => {
+        const result = await run(args, stage);
+        if (stage === "container_list") {
+          const service = args.find((arg) => arg.startsWith("label=com.docker.compose.service="))?.split("=").at(-1);
+          const rows = result.stdout.trim().split(/\r?\n/u).filter(Boolean);
+          t.diagnostic(JSON.stringify({ stage: "authority_container_list", service: ["postgres", "workspace", "worker"].includes(service) ? service : "other",
+            count: rows.length, idsValid: rows.every((id) => /^[a-f0-9]{12,64}$/u.test(id)), status: result.status }));
+        }
+        return result;
+      } });
+    } catch (diagnostic) {
+      if (/^[a-z_]+$/u.test(diagnostic?.code ?? "")) t.diagnostic(`authority_diagnostic_${diagnostic.code}`);
+    }
+  }
   finally {
     let cleanupError;
     try {
