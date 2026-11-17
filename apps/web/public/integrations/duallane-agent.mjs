@@ -2528,7 +2528,7 @@ function redactSecrets(text) {
 }
 
 // --- src/daemon.js ---
-const DAEMON_VALID_AGENTS = new Set(["auto", "codex", "claude", "cmd"]);
+const DAEMON_VALID_AGENTS = new Set(["auto", "cmd"]);
 const DAEMON_VALID_SANDBOXES = new Set(["read-only", "workspace-write", "danger-full-access"]);
 
 export function getDaemonStateDir(configDir) {
@@ -2638,22 +2638,14 @@ WantedBy=default.target
 export function detectAvailableAgentBinary(preferred = "auto", envPath = process.env.PATH || "") {
   const normalized = String(preferred || "auto").trim().toLowerCase();
   if (!DAEMON_VALID_AGENTS.has(normalized)) {
-    throw new TypeError(`Unsupported --agent "${preferred}". Use auto, codex, claude, or cmd.`);
+    
+  }
+  return normalized;
+}". `);
   }
   if (normalized === "cmd") return "cmd";
 
-  const checkBin = (bin) => {
-    const res = spawnSync(process.platform === "win32" ? "where" : "which", [bin], {
-      env: { ...process.env, PATH: envPath },
-      encoding: "utf8",
-    });
-    return res.status === 0 && Boolean(String(res.stdout || "").trim());
-  };
-
-  if (normalized === "codex" || normalized === "claude") {
-    return normalized;
-  }
-  if (checkBin("codex")) return "codex";
+  
   if (checkBin("claude")) return "claude";
   return "codex";
 }
@@ -3043,11 +3035,7 @@ async function invokeDaemonAgentTurn({
   const isGroup = conversation?.type === "group" || conversation?.kind === "group";
   const effectiveSandbox = isGroup ? "read-only" : sandboxMode;
 
-  if (agentMode === "claude") {
-    const args = ["-p"];
-    if (model) args.push("--model", model);
-    return await new Promise((resolve, reject) => {
-      const env = { ...process.env };
+  if (agentMode === "claude") { throw new Error("Claude mode removed"); };
       delete env.DUALLANE_BOT_TOKEN;
       const child = spawn("claude", args, {
         cwd: workdir,

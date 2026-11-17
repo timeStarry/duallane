@@ -1,8 +1,8 @@
 {
   "name": "@duallane/agent-sdk",
   "version": "1.0.14",
-  "sha256": "0bf75170622c056be0f75cd31770e3a9374e1daa16855c40679a64f7283889f6",
-  "byteSize": 169068,
+  "sha256": "43b72382c340ed260c557382d907c12a3dfbc8bc900a3150b2884b2c7dce59b8",
+  "byteSize": 168478,
   "downloadPath": "/integrations/duallane-agent.mjs",
   "minNodeVersion": "20.0.0",
   "highlights": [
