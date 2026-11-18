@@ -1223,7 +1223,5 @@ func stringValuePtr(value *string) string {
 	return *value
 }
 
-func timePtr(value time.Time) *time.Time { return &value }
-
 var _ Repository = (*PGRepository)(nil)
 var _ Tx = (*pgTx)(nil)
