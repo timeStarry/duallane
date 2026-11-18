@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readFile } from "node:fs/promises";
 import { disposableDatabaseURL } from "../../e2e/support/go-workspace-server.mjs";
+import { readWorkspaceBrowserConfig } from "./workspace-browser-config.mjs";
 
 test("Go browser database requires exact explicit opt-in and loopback URL", () => {
   const env = { DUALLANE_GO_E2E_ALLOW_SCHEMA_CREATION: "true", TEST_DATABASE_URL: "postgres://test:test@127.0.0.1:55439/duallane?sslmode=disable" };
@@ -24,9 +25,11 @@ test("Go Workspace browser gate exercises the production AppV1 without reusing s
   const server = await readFile(new URL("../../e2e/support/go-workspace-server.mjs", import.meta.url), "utf8");
   const manifest = JSON.parse(await readFile(new URL("../../package.json", import.meta.url), "utf8"));
   assert.equal(manifest.scripts["test:e2e:workspace-go"], "playwright test --config=playwright.workspace-go.config.ts");
-  assert.match(config, /testMatch: \["workspace-v1-acceptance\.spec\.ts", "agent-platform-acceptance\.spec\.ts"\]/);
+  const resolved = readWorkspaceBrowserConfig();
+  assert.deepEqual(resolved.testMatch, ["workspace-v1-acceptance.spec.ts", "agent-platform-acceptance.spec.ts"]);
   assert.match(config, /outputDir: "\.private-test-results\/workspace-go-browser"/);
-  assert.equal((config.match(/reuseExistingServer: false/g) || []).length, 2);
+  assert.equal(resolved.webServer.length, 2);
+  assert.ok(resolved.webServer.every((entry) => entry.reuseExistingServer === false));
   for (const setting of ["trace", "screenshot", "video"]) assert.match(config, new RegExp(`${setting}: "off"`));
   assert.match(server, /\["migrate", "workspace"\]/);
   assert.match(server, /searchParams\.set\("search_path", schema\)/);

@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { tmpdir } from "node:os";
+import { readWorkspaceBrowserConfig } from "../../scripts/backend/workspace-browser-config.mjs";
 
 const root = new URL("../../", import.meta.url);
 const read = (name) => readFile(new URL(name, root), "utf8");
@@ -77,17 +79,31 @@ test("Go Workspace browser coverage runs the current AppV1 acceptance suite with
   assert.equal((job.match(/run: pnpm test:e2e:workspace-go\n/g) || []).length, 1);
   assert.doesNotMatch(job, /--grep|--project|--retry|--timeout|continue-on-error|testIgnore|testMatch/);
 
-  assert.match(config, /testMatch: \["workspace-v1-acceptance\.spec\.ts", "agent-platform-acceptance\.spec\.ts"\]/);
+  const resolved = readWorkspaceBrowserConfig();
+  assert.deepEqual(resolved.testMatch, ["workspace-v1-acceptance.spec.ts", "agent-platform-acceptance.spec.ts"]);
   assert.match(config, /outputDir: "\.private-test-results\/workspace-go-browser"/);
   for (const option of ["trace", "screenshot", "video"]) {
     assert.match(config, new RegExp(`${option}: "off"`));
   }
-  assert.equal((config.match(/reuseExistingServer: false/g) || []).length, 2);
+  assert.equal(resolved.webServer.length, 2);
+  assert.ok(resolved.webServer.every((server) => server.reuseExistingServer === false));
 
   assert.doesNotMatch(job, /upload-artifact@|playwright-report|(?:^|\/)test-results\//);
   assert.doesNotMatch(job, /\b(?:AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AWS_SESSION_TOKEN|S3_SECRET|SMTP_PASSWORD|NTFY_TOKEN|OPENAI_API_KEY|GITHUB_CLIENT_SECRET)\b/);
   assert.doesNotMatch(job, /\$\{\{\s*secrets\./);
   assert.doesNotMatch(job, /\b(?:tee|GITHUB_STEP_SUMMARY|::debug|::notice|::warning)\b/);
+});
+
+test("sibling mobile acceptance is explicit, additive and keeps private output safeguards", () => {
+  const resolved = readWorkspaceBrowserConfig(tmpdir());
+  assert.deepEqual(resolved.testMatch, ["workspace-v1-acceptance.spec.ts", "agent-platform-acceptance.spec.ts", "mobile-compat-acceptance.spec.ts"]);
+  assert.equal(resolved.webServer.length, 3);
+  assert.ok(resolved.webServer.every((server) => server.reuseExistingServer === false));
+  assert.equal(resolved.webServer[2].command, "node e2e/support/mobile-web-server.mjs");
+  assert.equal(resolved.outputDir, ".private-test-results/workspace-go-browser");
+  for (const option of ["trace", "screenshot", "video"]) assert.equal(resolved.use[option], "off");
+  assert.equal(resolved.retries, 0);
+  assert.equal(resolved.failOnFlakyTests, true);
 });
 
 test("quality gate runs both the Workspace privacy guard and the read-only gateway smoke guard", () => {
