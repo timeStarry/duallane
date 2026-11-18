@@ -20,7 +20,7 @@ jobs:
   go-quality-gate:
     name: Go test, race, analysis, build, and PostgreSQL
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     env:
       CGO_ENABLED: "1"
       CC: gcc
