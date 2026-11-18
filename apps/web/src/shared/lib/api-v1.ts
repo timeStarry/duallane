@@ -509,10 +509,18 @@ export const apiV1 = {
       `/api/workspace/messages/${encodeURIComponent(messageId)}/reactions`,
       { method: "POST", body: JSON.stringify({ emoteKey }) }
     ),
-  markConversationRead: (conversationId: string) =>
-    requestJSON<Record<string, unknown>>(
+  markConversationRead: (conversationId: string, messageId: string) =>
+    requestJSON<{
+      ok: boolean;
+      conversationId?: string;
+      readAt?: string;
+      lastReadMessageId?: string | null;
+      lastReadSeq?: number | null;
+      unreadCount?: number;
+      firstUnreadMessageId?: string | null;
+    }>(
       `/api/v1/conversations/${encodeURIComponent(conversationId)}/read`,
-      { method: "POST" }
+      { method: "POST", body: JSON.stringify({ messageId }) }
     ),
   sendConversationTyping: (conversationId: string, state: "typing" | "thinking" = "typing") =>
     requestJSON<{ ok: boolean }>(
@@ -1435,12 +1443,14 @@ export interface EmoteCollectionDTO {
 }
 
 export interface EmoteLibraryDTO {
+  /** Ordered library entries include the individual favorites and packs. */
   entries: Array<{
     id: string;
     type: "emote" | "collection" | string;
     emote?: CustomEmoteDTO;
     collection?: EmoteCollectionDTO;
   }>;
+  /** Effective emote index, including items available only through packs. */
   emotes: CustomEmoteDTO[];
   collections: EmoteCollectionDTO[];
   usage: {

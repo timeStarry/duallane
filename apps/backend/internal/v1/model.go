@@ -60,6 +60,10 @@ type V1BootstrapConversation struct {
 	DisplayTitle          string   `json:"displayTitle"`
 	AvatarEmoji           *string  `json:"avatarEmoji,omitempty"`
 	UnreadCount           int      `json:"unreadCount"`
+	FirstUnreadMessageID  *string  `json:"firstUnreadMessageId"`
+	LastReadMessageID     *string  `json:"lastReadMessageId"`
+	LastReadAt            *string  `json:"lastReadAt"`
+	LastReadSeq           *int64   `json:"lastReadSeq"`
 	NotificationLevel     string   `json:"notificationLevel,omitempty"`
 	PinnedMessageIDs      []string `json:"pinnedMessageIds"`
 	MemberIDs             []string `json:"memberIds"`
@@ -68,6 +72,14 @@ type V1BootstrapConversation struct {
 	LastMessageSenderName string   `json:"lastMessageSenderName,omitempty"`
 	LastMessageAt         *string  `json:"lastMessageAt,omitempty"`
 	PeerLastReadAt        *string  `json:"peerLastReadAt,omitempty"`
+}
+
+type ConversationReadResult struct {
+	ReadAt               string  `json:"readAt"`
+	LastReadMessageID    *string `json:"lastReadMessageId"`
+	LastReadSeq          *int64  `json:"lastReadSeq"`
+	UnreadCount          int64   `json:"unreadCount"`
+	FirstUnreadMessageID *string `json:"firstUnreadMessageId"`
 }
 
 type SystemAnnouncement struct {

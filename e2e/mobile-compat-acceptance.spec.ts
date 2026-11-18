@@ -24,6 +24,8 @@ type BridgeAction = { input: Json; status: number; body: Json };
 async function attachHumanHost(page: Page, owner: BrowserContext, origin: string, nativeVersionCode = 10055) {
   const actions: BridgeAction[] = [];
   const requests: string[] = [];
+  const completedRequests: string[] = [];
+  const reads: BridgeAction[] = [];
   const installerCalls: Array<{ operation: string; url: string; sha256: string; version: string }> = [];
   const sockets = new Map<string, LiteWebSocket>();
   let socketOpened = false;
@@ -54,6 +56,10 @@ async function attachHumanHost(page: Page, owner: BrowserContext, origin: string
       method, headers, ...(body ? { data: body } : {}), maxRedirects: 0, timeout: 15_000,
     });
     const bodyText = await response.text();
+    completedRequests.push(pathname);
+    if (method === "POST" && /^\/api\/v1\/conversations\/[^/]+\/read$/u.test(pathname)) {
+      reads.push({ input: record(JSON.parse(body || "{}")), status: response.status(), body: record(JSON.parse(bodyText)) });
+    }
     if (method === "POST" && /^\/api\/workspace\/cards\/[^/]+\/actions$/u.test(pathname)) {
       actions.push({ input: record(JSON.parse(body)), status: response.status(), body: record(JSON.parse(bodyText)) });
     }
@@ -88,7 +94,7 @@ async function attachHumanHost(page: Page, owner: BrowserContext, origin: string
     const host = window as unknown as HostWindow;
     const noop = () => {};
     host.DualLaneNative = {
-      getBootstrapInfo: () => JSON.stringify({ authenticated: true, apiOrigin: origin, appVersion: "1.1.0", nativeVersion: nativeVersionCode === 10055 ? "1.0.14" : "1.0.12", versionCode: nativeVersionCode, platform: "android", systemTheme: "light", otaActive: true }),
+      getBootstrapInfo: () => JSON.stringify({ authenticated: true, apiOrigin: origin, appVersion: "1.1.0", nativeVersion: nativeVersionCode === 10100 ? "1.1.0" : nativeVersionCode === 10055 ? "1.0.14" : "1.0.12", versionCode: nativeVersionCode, platform: "android", systemTheme: "light", otaActive: true }),
       httpRequest: (id: string, method: string, path: string, headers: string, body: string) => {
         void host.__mobileHumanHTTP(method, path, headers, body).then(
           (response) => host.__duallaneResolveCall?.(id, true, JSON.stringify(response)),
@@ -109,8 +115,102 @@ async function attachHumanHost(page: Page, owner: BrowserContext, origin: string
       getBackgroundPushStatus: () => JSON.stringify({ keepAliveEnabled: false, notificationsGranted: true, ignoringBatteryOptimizations: true }),
     };
   }, { origin, nativeVersionCode });
-  return { actions, requests, installerCalls, socketOpened: () => socketOpened, close: () => { for (const socket of sockets.values()) socket.close(); sockets.clear(); } };
+  return { actions, reads, requests, completedRequests, installerCalls, socketOpened: () => socketOpened, close: () => { for (const socket of sockets.values()) socket.close(); sockets.clear(); } };
 }
+
+test("actual mobile message-list prefetch preserves Go unread until the latest room messages are displayed", async ({ browser, baseURL }, testInfo) => {
+  test.skip(!process.env.DUALLANE_MOBILE_E2E_ROOT, "Explicit optional mobile checkout required");
+  test.setTimeout(120_000);
+  const owner = await browser.newContext({ baseURL, viewport: { width: 1280, height: 800 } });
+  const peer = await browser.newContext({ baseURL, viewport: { width: 1280, height: 800 } });
+  const mobile = await browser.newContext({ viewport: { width: 390, height: 844 } });
+  const ownerPage = await owner.newPage();
+  const peerPage = await peer.newPage();
+  const page = await mobile.newPage();
+  const runId = randomUUID();
+  const groupTitle = `Mobile unread ${runId}`;
+  let host: Awaited<ReturnType<typeof attachHumanHost>> | undefined;
+  const endpoint = (path: string) => new URL(path, baseURL!).href;
+  const boot = async (context: BrowserContext) => {
+    const response = await context.request.get(endpoint("/api/workspace/bootstrap"));
+    expect(response.status()).toBe(200);
+    return record(await response.json());
+  };
+  try {
+    await ownerPage.goto(`${baseURL}/`);
+    await ownerPage.getByTestId("home-card-workspace").click();
+    await ownerPage.getByRole("button", { name: "使用 GitHub 登录共享空间" }).click();
+    await expect.poll(async () => (await owner.request.get(endpoint("/api/workspace/bootstrap"))).status()).toBe(200);
+    await ownerPage.getByRole("button", { name: "设置中心" }).click();
+    const settings = ownerPage.getByRole("dialog", { name: "设置", exact: true });
+    await settings.getByRole("button", { name: "个人", exact: true }).click();
+    await settings.getByRole("button", { name: "生成邀请码" }).click();
+    const invite = (await settings.getByTestId("generated-invite-code").textContent())?.trim() || "";
+    expect(invite.length).toBeGreaterThan(4);
+    await ownerPage.keyboard.press("Escape");
+    await peerPage.goto(`${baseURL}/?invite=${encodeURIComponent(invite)}`);
+    await peerPage.getByPlaceholder("可选：测试成员昵称（双窗口联调推荐使用）").fill(`Mobile unread peer ${runId}`);
+    await peerPage.getByRole("button", { name: "通过邀请码直接加入（开发环境快捷入口）" }).click();
+    await expect.poll(async () => (await peer.request.get(endpoint("/api/workspace/bootstrap"))).status(), { timeout: 15_000 }).toBe(200);
+    const peerId = text(record(record((await boot(peer)).auth).currentUser).id);
+    const created = await owner.request.post(endpoint("/api/v1/conversations/groups"), { data: { title: groupTitle, memberIds: [peerId] } });
+    expect(created.status()).toBe(201);
+    const group = record(await created.json());
+    const conversationId = text(record(group.conversation ?? group).id);
+    const postPeer = async (label: string) => {
+      const response = await peer.request.post(endpoint("/api/workspace/messages"), { data: {
+        conversationId, clientMessageId: `mobile-unread-${label}-${runId}`, content: buildMessageContent([messageText(`${label} ${runId}`)]),
+      } });
+      expect(response.ok()).toBe(true);
+      const payload = record(await response.json());
+      return text(record(payload.message ?? payload).id);
+    };
+    const unread = async () => {
+      const conversations = (await boot(owner)).conversations as Json[];
+      const conversation = conversations.find((entry) => entry.id === conversationId);
+      if (!conversation) throw new Error("Synthetic unread group missing");
+      return Number(conversation.unreadCount);
+    };
+    await postPeer("第一条未读");
+    const latestId = await postPeer("第二条未读");
+    await expect.poll(unread).toBe(2);
+    host = await attachHumanHost(page, owner, baseURL!, 10100);
+    await page.goto(mobileURL);
+    await expect(page.getByRole("heading", { name: "消息", exact: true })).toBeVisible();
+    const badge = page.getByTestId(`conv-unread-${conversationId}`);
+    await expect(badge).toHaveText("2");
+    const historyPath = `/api/workspace/conversations/${conversationId}/messages?limit=90`;
+    await expect.poll(() => host!.completedRequests.includes(historyPath), { message: "actual background history prefetch completed" }).toBe(true);
+    await expect.poll(() => host!.socketOpened()).toBe(true);
+    await expect(badge).toHaveText("2");
+    expect(host.reads).toHaveLength(0);
+    expect(await unread()).toBe(2);
+    await page.screenshot({ path: testInfo.outputPath("mobile-list-prefetched-unread-390.png") });
+
+    await page.getByText(groupTitle, { exact: true }).click();
+    await expect(page.getByTestId("chat-message-scroll")).toContainText(`第二条未读 ${runId}`);
+    await expect.poll(() => host!.reads.length).toBe(1);
+    expect(host.reads[0].input).toEqual({ messageId: latestId });
+    expect(host.reads[0].status).toBe(200);
+    expect(host.reads[0].body).toMatchObject({ ok: true, conversationId, lastReadMessageId: latestId, unreadCount: 0 });
+    await expect.poll(unread).toBe(0);
+    await page.getByRole("button", { name: "返回会话列表", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "消息", exact: true })).toBeVisible();
+    await postPeer("返回列表后的新消息");
+    await expect(badge).toHaveText("1");
+    await expect.poll(unread).toBe(1);
+    // Fetch the same production history endpoint once more while the App stays
+    // on its list. This GET must not change its server-authoritative badge.
+    const history = await owner.request.get(endpoint(historyPath));
+    expect(history.status()).toBe(200);
+    expect(await unread()).toBe(1);
+    await expect(badge).toHaveText("1");
+    expect(host.reads).toHaveLength(1);
+  } finally {
+    host?.close();
+    await mobile.close(); await peer.close(); await owner.close();
+  }
+});
 
 test("actual mobile App consumes Go/SDK cards through a simulated authenticated native host", async ({ browser, baseURL }, testInfo) => {
   test.skip(!process.env.DUALLANE_MOBILE_E2E_ROOT, "Explicit optional mobile checkout required");

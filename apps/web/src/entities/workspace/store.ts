@@ -1,5 +1,4 @@
 import { create } from "zustand";
-import { useLaneStore } from "@/entities/lane/store";
 import type { DualLaneCardKitDocument } from "@duallane/protocol";
 import { readWorkspaceCardReferences, type WorkspaceCardReference } from "@/shared/lib/workspace-cards";
 import {
@@ -16,6 +15,8 @@ import { emotePacks } from "@/emotes";
 import { useEmoteStore } from "@/entities/emote/store";
 import { useDisplayPrefsStore } from "@/shared/lib/display-prefs";
 import { buildDevPreviewFixture } from "./demo-fixture";
+import { isReadAnchor, readConversationUnread, unreadMessage, type ConversationUnread } from "./unread";
+import { mergeWorkspaceMessageWindow } from "@/workspace-conversation-state";
 import {
   loadWorkspaceDrafts,
   loadWorkspaceScrolls,
@@ -115,6 +116,8 @@ export interface V1Message {
   }>;
   editedAt?: string;
   recalledAt?: string;
+  hiddenByCurrentUser?: boolean;
+  creationSeq?: number;
   createdAt: string;
   status?: "sending" | "sent" | "read" | "failed";
   reactions: Record<string, { count: number; reactedByMe: boolean }>;
@@ -130,6 +133,9 @@ export interface V1Conversation {
   avatarUrl?: string;
   avatarEmoji?: string;
   unreadCount: number;
+  firstUnreadMessageId?: string | null;
+  lastReadMessageId?: string | null;
+  lastReadSeq?: number;
   mentionCount: number;
   pinnedMessageIds: string[];
   memberIds: string[];
@@ -169,7 +175,14 @@ interface WorkspaceState {
   cardRevisions: Record<string, number>;
   members: Record<string, V1User>;
   activeConversationId: string | null;
-  conversationEntry: { conversationId: string; revision: number; unreadCount: number; loading: boolean } | null;
+  conversationEntry: (ConversationUnread & {
+    conversationId: string;
+    revision: number;
+    history: "loading" | "ready" | "failed";
+    incomingAtEntry: readonly string[];
+    lastMessageAt?: string;
+  }) | null;
+  liveIncomingIdsByConv: Record<string, readonly string[]>;
   highlightedMessageId: string | null;
   threadsByRootId: Record<string, ThreadViewResponse>;
 
@@ -190,6 +203,7 @@ interface WorkspaceState {
   logout: () => Promise<void>;
   selectConversation: (conversationId: string) => void;
   loadConversationMessages: (conversationId: string) => Promise<void>;
+  markVisibleConversationRead: (conversationId: string, messageId: string) => Promise<void>;
   jumpToMessage: (conversationId: string, messageId: string) => void;
   setDraft: (conversationId: string, text: string, replyToMessageId?: string) => void;
   setScrollTop: (conversationId: string, scrollTop: number) => void;
@@ -323,12 +337,6 @@ export function formatConversationPreviewText(rawText?: string): string {
       return emoteTokenToPreviewLabel.get(full) || full;
     });
   return replacedEmotes.replace(/\s*\n+\s*/g, " ").trim();
-}
-
-function isWorkspaceChatVisible(): boolean {
-  const ui = useLaneStore.getState();
-  return ui.activeLane === "workspace" && ui.entryView === "workspace" &&
-    !(typeof window !== "undefined" && window.matchMedia?.("(max-width: 760px)").matches && ui.mobileView === "list");
 }
 
 export function computeGlobalAlertUnreadCount(
@@ -644,6 +652,9 @@ function mapRawMessage(
       : undefined,
     editedAt: m.editedAt ? String(m.editedAt) : undefined,
     recalledAt,
+    hiddenByCurrentUser: m.hiddenByCurrentUser === true,
+    creationSeq: typeof m.creationSeq === "number" && Number.isSafeInteger(m.creationSeq) && m.creationSeq > 0
+      ? m.creationSeq : undefined,
     createdAt,
     status: resolvedStatus,
     reactions: recalledAt ? {} : mapRawReactions(m.reactions),
@@ -955,7 +966,7 @@ export function parseBootstrapPayload(raw: Record<string, unknown>) {
           : String(c.displayTitle || c.title || c.name || "未命名对话"),
       avatarUrl: resolvedAvatar.avatarUrl,
       avatarEmoji: resolvedAvatar.avatarEmoji,
-      unreadCount: Number(c.unreadCount || 0),
+      ...readConversationUnread(c),
       mentionCount: Number(c.mentionCount || 0),
       pinnedMessageIds: Array.isArray(c.pinnedMessageIds) ? c.pinnedMessageIds.map(String) : [],
       memberIds: cleanedMemberIds,
@@ -1158,6 +1169,46 @@ function clearBootstrapShellCache(): void {
 }
 
 export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
+  const historyRequests = new Map<string, object>();
+  const readRequests = new Map<string, object>();
+
+  const applyReadProjection = (conversationId: string, raw: Record<string, unknown>) => {
+    set((state) => {
+      const conversation = state.conversations[conversationId];
+      if (!conversation || (typeof raw.lastReadSeq === "number" &&
+        raw.lastReadSeq < (conversation.lastReadSeq ?? -1))) return state;
+
+      const messages = state.messagesByConv[conversationId] || [];
+      const marker = typeof raw.lastReadMessageId === "string" ? raw.lastReadMessageId : null;
+      const markerIndex = marker ? messages.findIndex((message) => message.id === marker) : -1;
+      const live = state.liveIncomingIdsByConv[conversationId] || [];
+      const readTime = typeof raw.readAt === "string" ? Date.parse(raw.readAt) : NaN;
+      const knownUnread = new Set(messages.filter((message, index) => {
+        if (!unreadMessage(message, state.currentUser?.id)) return false;
+        if (typeof raw.lastReadSeq === "number" && message.creationSeq !== undefined) {
+          return message.creationSeq > raw.lastReadSeq;
+        }
+        return markerIndex >= 0 ? index > markerIndex : Date.parse(message.createdAt) > readTime;
+      }).map((message) => message.id));
+      const remaining = live.filter((id) => knownUnread.has(id));
+      // A newer message can arrive while this HTTP receipt is in flight.
+      const count = Math.max(remaining.length, typeof raw.unreadCount === "number" ? raw.unreadCount : 0);
+      return {
+        conversations: {
+          ...state.conversations,
+          [conversationId]: {
+            ...conversation, ...readConversationUnread({
+              ...raw, unreadCount: count,
+              firstUnreadMessageId: raw.firstUnreadMessageId ?? remaining[0] ?? null,
+            }, conversation),
+            mentionCount: count === 0 ? 0 : conversation.mentionCount,
+          },
+        },
+        liveIncomingIdsByConv: { ...state.liveIncomingIdsByConv, [conversationId]: remaining },
+      };
+    });
+  };
+
   const wireP2PSession = (roomId: string, key: CryptoKey) => {
     teardownP2PTransport();
     if (typeof window === "undefined" || typeof WebSocket === "undefined") return;
@@ -1325,7 +1376,8 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
         }
 
         if (frame.type === "ready") {
-          if (typeof frame.currentSeq === "number" && frame.currentSeq > cursor) {
+          // The server sends ready before its replay. Persist only delivered events.
+          if (frame.replayCount === 0 && typeof frame.currentSeq === "number" && frame.currentSeq > cursor) {
             cursor = frame.currentSeq;
             void setWorkspaceSyncCursor(cursor);
           }
@@ -1345,6 +1397,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
         if (frame.type === "event" && frame.event && typeof frame.event === "object") {
           const eventObj = frame.event as Record<string, unknown>;
           const seq = Number(eventObj.seq || 0);
+          if (seq > 0 && seq <= cursor) return;
           if (seq > cursor) {
             cursor = seq;
             void setWorkspaceSyncCursor(cursor);
@@ -1451,18 +1504,12 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
       if (!convId || !readerId || !readAt) return;
       const readMs = Date.parse(readAt);
       if (!Number.isFinite(readMs)) return;
+      if (readerId === get().currentUser?.id) {
+        applyReadProjection(convId, { ...payload, readAt });
+        return;
+      }
 
       set((s) => {
-        if (s.currentUser?.id && readerId === s.currentUser.id) {
-          const prevConv = s.conversations[convId];
-          if (!prevConv) return s;
-          return {
-            conversations: {
-              ...s.conversations,
-              [convId]: { ...prevConv, unreadCount: 0, mentionCount: 0 },
-            },
-          };
-        }
         const prevConv = s.conversations[convId];
         const prevPeerMs = prevConv?.peerLastReadAt ? Date.parse(prevConv.peerLastReadAt) : 0;
         const nextPeerLastReadAt =
@@ -1621,10 +1668,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
                 ),
           avatarUrl: hasExplicitAvatarKey ? parsedAvatar.avatarUrl : prev?.avatarUrl,
           avatarEmoji: hasExplicitAvatarKey ? parsedAvatar.avatarEmoji : prev?.avatarEmoji,
-          unreadCount:
-            convId === s.activeConversationId && isWorkspaceChatVisible()
-              ? 0
-              : Number(c.unreadCount ?? prev?.unreadCount ?? 0),
+          ...readConversationUnread(c, prev),
           mentionCount: prev?.mentionCount || 0,
           pinnedMessageIds: prev?.pinnedMessageIds || [],
           memberIds: parsedMemberIds,
@@ -1706,10 +1750,13 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
       const convId = String(
         rawMsg.conversationId || payload.conversationId || eventObj.conversationId || ""
       );
-      if (!convId || !rawMsg.id) return;
+      if (!convId || !rawMsg.id || rawMsg.topicId ||
+        (rawMsg.threadRootId && rawMsg.alsoSendToChannel === false)) return;
       const stateSnap = get();
       const snapConv = stateSnap.conversations[convId];
-      const mapped = mapRawMessage(convId, rawMsg, stateSnap.members, {
+      const messageData = evType === "message.created" && rawMsg.creationSeq == null
+        ? { ...rawMsg, creationSeq: eventObj.seq } : rawMsg;
+      const mapped = mapRawMessage(convId, messageData, stateSnap.members, {
         currentUserId: stateSnap.currentUser?.id,
         convKind: snapConv?.kind,
         peerLastReadAt: snapConv?.peerLastReadAt,
@@ -1724,20 +1771,6 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
           : undefined;
       const isSystemMessage =
         mapped.kind === "system" || String(rawMsg.kind || "") === "system";
-      const isOwnSnap = Boolean(
-        stateSnap.currentUser?.id && mapped.senderId === stateSnap.currentUser.id
-      );
-
-      if (
-        evType === "message.created" &&
-        !isOwnSnap &&
-        !isSystemMessage &&
-        convId === stateSnap.activeConversationId && isWorkspaceChatVisible() &&
-        !stateSnap.isPreviewMode
-      ) {
-        void apiV1.markConversationRead(convId).catch(() => {});
-      }
-
       set((s) => {
         const prevConv = s.conversations[convId];
         const isOwn = Boolean(s.currentUser?.id && mapped.senderId === s.currentUser.id);
@@ -1774,6 +1807,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
                       ...item,
                       ...mapped,
                       recalledAt: recalledTimestamp,
+                      creationSeq: mapped.creationSeq ?? item.creationSeq,
                       blocks: [],
                       reactions: {},
                       attachments: undefined,
@@ -1791,6 +1825,9 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
                           : [{ type: "text" as const, text: mapped.plainText }],
                       reactions:
                         rawMsg.reactions !== undefined ? mapped.reactions : item.reactions,
+                      hiddenByCurrentUser: rawMsg.hiddenByCurrentUser !== undefined
+                        ? mapped.hiddenByCurrentUser : item.hiddenByCurrentUser,
+                      creationSeq: mapped.creationSeq ?? item.creationSeq,
                       attachments: mapped.attachments || item.attachments,
                       threadReplyCount:
                         rawMsg.threadReplyCount !== undefined || rawMsg.replyCount !== undefined
@@ -1828,15 +1865,26 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
           }
         }
 
-        const isActive = convId === s.activeConversationId && isWorkspaceChatVisible();
-        const baseUnread = prevConv?.unreadCount || 0;
-        const nextUnreadCount = isActive
-          ? 0
-          : typeof serverUnread === "number"
-          ? serverUnread
-          : evType === "message.created" && !alreadyExisted && !isOwn && !isSystemMessage
-          ? baseUnread + 1
-          : baseUnread;
+        const previousLive = s.liveIncomingIdsByConv[convId] || [];
+        const serverProjection = readConversationUnread(convPayload, prevConv);
+        const readSequence = serverProjection.lastReadSeq ?? -1;
+        // Event payloads can carry a more recent read marker than our local copy.
+        const consumed = readSequence > (prevConv?.lastReadSeq ?? -1)
+          ? new Set(nextList.filter((message) => (message.creationSeq ?? Infinity) <= readSequence).map((message) => message.id))
+          : undefined;
+        const live = consumed ? previousLive.filter((id) => !consumed.has(id)) : previousLive;
+        const arrived = evType === "message.created" && !alreadyExisted &&
+          unreadMessage(mapped, s.currentUser?.id) && !live.includes(mapped.id) &&
+          serverUnread !== 0 && (mapped.creationSeq ?? Infinity) > readSequence;
+        const removed = (evType === "message.recalled" || mapped.recalledAt || mapped.hiddenByCurrentUser) && live.includes(mapped.id);
+        const nextLive = serverUnread !== undefined && serverProjection.unreadCount === 0 ? []
+          : arrived ? [...live, mapped.id]
+          : removed ? live.filter((id) => id !== mapped.id) : live;
+        const nextUnread = serverUnread !== undefined ? serverProjection : readConversationUnread({
+          unreadCount: Math.max(0, serverProjection.unreadCount + Number(arrived) - Number(removed)),
+          firstUnreadMessageId: removed && serverProjection.firstUnreadMessageId === mapped.id ? nextLive[0] ?? null
+            : arrived && serverProjection.unreadCount === 0 ? mapped.id : serverProjection.firstUnreadMessageId,
+        }, serverProjection);
 
         const isLatestInConv =
           evType === "message.created" ||
@@ -1869,7 +1917,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
               lastMessageSenderName: isLatestInConv
                 ? nextSenderName
                 : prevConv.lastMessageSenderName,
-              unreadCount: nextUnreadCount,
+              ...nextUnread,
               peerLastReadAt: nextPeerLastReadAt,
             }
           : {
@@ -1878,7 +1926,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
               title: String(
                 convPayload?.displayTitle || convPayload?.title || "新对话"
               ),
-              unreadCount: nextUnreadCount,
+              ...nextUnread,
               mentionCount: 0,
               pinnedMessageIds: [],
               memberIds: [],
@@ -1919,6 +1967,8 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
             ...s.messagesByConv,
             [convId]: nextList,
           },
+          liveIncomingIdsByConv: nextLive === previousLive ? s.liveIncomingIdsByConv
+            : { ...s.liveIncomingIdsByConv, [convId]: nextLive },
           conversations: {
             ...s.conversations,
             [convId]: nextConv,
@@ -1989,6 +2039,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
             conversations: nextConversations,
             conversationOrder: nextOrder,
             pinnedConversationIds: s.pinnedConversationIds.filter((id) => id !== convId),
+            liveIncomingIdsByConv: { ...s.liveIncomingIdsByConv, [convId]: [] },
             activeConversationId:
               s.activeConversationId === convId ? nextOrder[0] || null : s.activeConversationId,
           };
@@ -2050,6 +2101,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
     members: {},
     activeConversationId: null,
     conversationEntry: null,
+    liveIncomingIdsByConv: {},
     highlightedMessageId: null,
     threadsByRootId: {},
     drafts: {},
@@ -2084,6 +2136,8 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
           members: fixture.members,
           conversations: fixture.conversations,
           conversationOrder: fixture.conversationOrder,
+          conversationEntry: null,
+          liveIncomingIdsByConv: {},
           messagesByConv: fixture.messagesByConv,
           activeConversationId: fixture.activeConversationId,
           threadsByRootId: fixture.threadsByRootId,
@@ -2205,6 +2259,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
         }
 
         const prevState = get();
+        const sameActor = prevState.currentUser?.id === parsed.currentUser.id;
         const currentActive = prevState.activeConversationId;
         const firstConvId =
           currentActive && parsed.conversations[currentActive]
@@ -2212,14 +2267,29 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
             : parsed.conversationOrder[0] || null;
 
         const mergedMessagesByConv: Record<string, V1Message[]> = {};
+        const liveIncomingIdsByConv: WorkspaceState["liveIncomingIdsByConv"] = {};
         for (const convId of Object.keys(parsed.conversations)) {
           const incoming = parsed.messagesByConv[convId] || [];
           const existing =
-            prevState.currentUser?.id === parsed.currentUser.id
+            sameActor
               ? prevState.messagesByConv[convId] || []
               : [];
           mergedMessagesByConv[convId] = incoming.length > 0 ? incoming : existing;
+          if (sameActor && parsed.conversations[convId].unreadCount > 0 && prevState.liveIncomingIdsByConv[convId]?.length) {
+            liveIncomingIdsByConv[convId] = prevState.liveIncomingIdsByConv[convId];
+          }
         }
+
+        const previousEntry = sameActor && prevState.conversationEntry?.conversationId === firstConvId
+          ? prevState.conversationEntry : null;
+        const conversationEntry = firstConvId ? previousEntry ?? {
+          ...readConversationUnread(undefined, parsed.conversations[firstConvId]),
+          conversationId: firstConvId,
+          revision: (prevState.conversationEntry?.revision || 0) + 1,
+          history: "loading" as const,
+          incomingAtEntry: liveIncomingIdsByConv[firstConvId] || [],
+          lastMessageAt: parsed.conversations[firstConvId]?.lastMessageAt,
+        } : null;
 
         set({
           authStatus: "authenticated",
@@ -2243,6 +2313,8 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
           userPreferences,
           messagesByConv: mergedMessagesByConv,
           activeConversationId: firstConvId,
+          conversationEntry,
+          liveIncomingIdsByConv,
           drafts,
           scrollTops,
         });
@@ -2316,6 +2388,8 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
     logout: async () => {
       clearBootstrapShellCache();
       teardownWorkspaceSocket();
+      historyRequests.clear();
+      readRequests.clear();
       await apiV1.logout().catch(() => {});
       if (typeof window !== "undefined" && window.location?.pathname?.startsWith("/workspace")) {
         window.history?.replaceState?.(null, "", "/");
@@ -2333,16 +2407,24 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
         messagesByConv: {},
         cardRevisions: {},
         activeConversationId: null,
+        conversationEntry: null,
+        liveIncomingIdsByConv: {},
       });
     },
 
     loadConversationMessages: async (conversationId) => {
-      if (get().isPreviewMode) return;
-      const revision = get().conversationEntry?.revision;
+      const initial = get();
+      if (initial.isPreviewMode) return;
+      const revision = initial.conversationEntry?.revision;
+      const baseline = initial.messagesByConv[conversationId] || [];
+      const request = {};
+      historyRequests.set(conversationId, request);
+      let history: "ready" | "failed" = "failed";
       try {
         const res = await apiV1.listMessages(conversationId);
-        if (!Array.isArray(res.messages)) return;
         const snap = get();
+        if (historyRequests.get(conversationId) !== request || snap.currentUser?.id !== initial.currentUser?.id ||
+          !snap.conversations[conversationId] || !Array.isArray(res.messages)) return;
         const conv = snap.conversations[conversationId];
         const nextMembers = { ...snap.members };
         const mapped = res.messages.map((m) => {
@@ -2354,11 +2436,25 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
           backfillMemberFromMessage(nextMembers, msg);
           return msg;
         });
+        const local = snap.messagesByConv[conversationId] || [];
+        const window = mergeWorkspaceMessageWindow(local, mapped, {
+          baselineMessages: baseline,
+          requestRevision: 0,
+          currentRevision: local === baseline ? 0 : 1,
+          authoritativeWindow: true,
+          preservePostRequestMessages: true,
+        });
+        history = "ready";
         set((s) => ({
           members: { ...s.members, ...nextMembers },
           messagesByConv: {
             ...s.messagesByConv,
-            [conversationId]: mapped,
+            [conversationId]: window,
+          },
+          liveIncomingIdsByConv: {
+            ...s.liveIncomingIdsByConv,
+            [conversationId]: (s.liveIncomingIdsByConv[conversationId] || []).filter((id) =>
+              window.some((message) => message.id === id && unreadMessage(message, s.currentUser?.id))),
           },
         }));
         if (get().activeConversationId === conversationId) {
@@ -2367,8 +2463,37 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
       } catch {
         // Keep existing cached messages
       } finally {
-        set((s) => s.conversationEntry?.conversationId === conversationId && s.conversationEntry.revision === revision
-          ? { conversationEntry: { ...s.conversationEntry, loading: false } } : {});
+        if (historyRequests.get(conversationId) === request) {
+          historyRequests.delete(conversationId);
+          set((s) => s.currentUser?.id === initial.currentUser?.id && s.conversationEntry?.conversationId === conversationId &&
+            s.conversationEntry.revision === revision ? { conversationEntry: { ...s.conversationEntry, history } } : {});
+        }
+      }
+    },
+
+    markVisibleConversationRead: async (conversationId, messageId) => {
+      const initial = get();
+      const conversation = initial.conversations[conversationId];
+      if (!initial.currentUser || initial.activeConversationId !== conversationId || !conversation?.unreadCount ||
+        initial.conversationEntry?.conversationId !== conversationId || initial.conversationEntry.history !== "ready" ||
+        initial.connectionStatus !== "connected" || readRequests.has(conversationId) ||
+        conversation.lastReadMessageId === messageId) return;
+      const message = initial.messagesByConv[conversationId]?.find((item) => item.id === messageId);
+        if (!message || !isReadAnchor(message)) return;
+
+      const request = {};
+      readRequests.set(conversationId, request);
+      try {
+        const receipt: Record<string, unknown> = initial.isPreviewMode
+          ? { lastReadMessageId: messageId, unreadCount: 0 }
+          : await apiV1.markConversationRead(conversationId, messageId);
+        if (get().currentUser?.id === initial.currentUser.id && readRequests.get(conversationId) === request) {
+          applyReadProjection(conversationId, { lastReadMessageId: messageId, ...receipt });
+        }
+      } catch {
+        // Scrolling or reconnecting can retry without showing a read error toast.
+      } finally {
+        if (readRequests.get(conversationId) === request) readRequests.delete(conversationId);
       }
     },
 
@@ -2376,26 +2501,17 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
       set((s) => ({
         activeConversationId: conversationId,
         conversationEntry: {
+          ...readConversationUnread(undefined, s.conversations[conversationId]),
           conversationId,
           revision: (s.conversationEntry?.revision || 0) + 1,
-          unreadCount: s.conversations[conversationId]?.unreadCount || 0,
-          loading: !s.isPreviewMode,
+          history: s.isPreviewMode ? "ready" : "loading",
+          incomingAtEntry: s.liveIncomingIdsByConv[conversationId] || [],
+          lastMessageAt: s.conversations[conversationId]?.lastMessageAt,
         },
         highlightedMessageId: null,
-        conversations: s.conversations[conversationId]
-          ? {
-              ...s.conversations,
-              [conversationId]: {
-                ...s.conversations[conversationId],
-                unreadCount: 0,
-                mentionCount: 0,
-              },
-            }
-          : s.conversations,
       }));
       if (!get().isPreviewMode) {
         void get().loadConversationMessages(conversationId);
-        void apiV1.markConversationRead(conversationId).catch(() => {});
       }
     },
 

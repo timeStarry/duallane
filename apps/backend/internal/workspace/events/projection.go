@@ -39,6 +39,7 @@ func (r *PGRepository) ProjectEventPayload(ctx context.Context, actor *auth.Acto
 			}
 		}
 	case "conversation.created", "conversation.updated", "conversation.notification_updated":
+		delete(projected, "conversation")
 		conversationID := stringField(projected, "conversationId")
 		if conversationID == "" {
 			conversationID = pointerString(event.ConversationID)
@@ -50,6 +51,32 @@ func (r *PGRepository) ProjectEventPayload(ctx context.Context, actor *auth.Acto
 			}
 			if conversation != nil {
 				projected["conversation"] = conversation
+			}
+		}
+	case "conversation.read":
+		if actor != nil && actor.ID == stringField(projected, "userId") {
+			conversationID := stringField(projected, "conversationId")
+			reader := workspaceConversations.NewPGRepository(r.pool)
+			record, err := reader.GetVisibleConversationRecord(ctx, event.SpaceID, actor.ID, conversationID)
+			if err != nil {
+				return nil, internalError("project workspace read event", err)
+			}
+			if record != nil {
+				projected["unreadCount"] = record.UnreadCount
+				projected["firstUnreadMessageId"] = nil
+				if record.FirstUnreadMessageID != nil {
+					projected["firstUnreadMessageId"] = *record.FirstUnreadMessageID
+				}
+				projected["lastReadMessageId"] = nil
+				if record.LastReadMessageID != nil {
+					projected["lastReadMessageId"] = *record.LastReadMessageID
+				}
+				if record.LastReadSeq != nil {
+					projected["lastReadSeq"] = *record.LastReadSeq
+				}
+				if record.LastReadAt != nil {
+					projected["readAt"] = record.LastReadAt.UTC().Format(time.RFC3339Nano)
+				}
 			}
 		}
 	case "reaction.added", "reaction.removed":
@@ -65,6 +92,7 @@ func (r *PGRepository) ProjectEventPayload(ctx context.Context, actor *auth.Acto
 			projected["reactions"] = reactions
 		}
 	case "message.created", "message.recalled", "message.edited":
+		delete(projected, "conversation")
 		messageID := stringField(projected, "messageId")
 		if messageID == "" {
 			messageID = pointerString(event.TargetID)
@@ -75,6 +103,9 @@ func (r *PGRepository) ProjectEventPayload(ctx context.Context, actor *auth.Acto
 				return nil, err
 			}
 			if message != nil {
+				if event.Type == "message.created" {
+					message["creationSeq"] = event.Seq
+				}
 				projected["message"] = message
 			}
 		}
@@ -230,25 +261,29 @@ func (r *PGRepository) publicConversationPayload(ctx context.Context, spaceID st
 		notificationLevel = "all"
 	}
 	result := map[string]any{
-		"id":                id,
-		"spaceId":           spaceID,
-		"type":              typ,
-		"title":             title,
-		"displayTitle":      title,
-		"retentionCount":    retentionCount,
-		"retentionText":     "保留最近 " + formatInt(retentionCount) + " 条消息",
-		"createdAt":         formatTimestamp(createdAt),
-		"lastActivityAt":    formatTimestamp(record.LastActivityAt),
-		"messageCount":      messageCount,
-		"memberCount":       memberCount,
-		"unreadCount":       record.UnreadCount,
-		"lastReadMessageId": nil,
-		"lastReadAt":        nil,
-		"lastReadSeq":       nil,
-		"notificationLevel": notificationLevel,
-		"members":           []any{},
-		"otherMember":       nil,
-		"latestMessages":    []any{},
+		"id":                   id,
+		"spaceId":              spaceID,
+		"type":                 typ,
+		"title":                title,
+		"displayTitle":         title,
+		"retentionCount":       retentionCount,
+		"retentionText":        "保留最近 " + formatInt(retentionCount) + " 条消息",
+		"createdAt":            formatTimestamp(createdAt),
+		"lastActivityAt":       formatTimestamp(record.LastActivityAt),
+		"messageCount":         messageCount,
+		"memberCount":          memberCount,
+		"unreadCount":          record.UnreadCount,
+		"firstUnreadMessageId": nil,
+		"lastReadMessageId":    nil,
+		"lastReadAt":           nil,
+		"lastReadSeq":          nil,
+		"notificationLevel":    notificationLevel,
+		"members":              []any{},
+		"otherMember":          nil,
+		"latestMessages":       []any{},
+	}
+	if record.FirstUnreadMessageID != nil {
+		result["firstUnreadMessageId"] = *record.FirstUnreadMessageID
 	}
 	if record.LastReadMessageID != nil {
 		result["lastReadMessageId"] = *record.LastReadMessageID
@@ -378,7 +413,8 @@ func (r *PGRepository) publicMessagePayload(ctx context.Context, spaceID string,
 		FROM messages m
 		LEFT JOIN users u ON u.id = m.author_id
 		LEFT JOIN user_remarks ur ON ur.owner_user_id = $3 AND ur.target_user_id = u.id
-		WHERE m.id = $1 AND m.space_id = $2 AND m.topic_id IS NULL AND m.deleted_at IS NULL
+	WHERE m.id = $1 AND m.space_id = $2 AND m.topic_id IS NULL AND m.deleted_at IS NULL
+		AND (m.thread_root_id IS NULL OR m.also_send_to_channel = TRUE)
 	`, messageID, spaceID, actor.ID).Scan(&id, &conversationID, &authorID, &displayName,
 		&authorNickname, &authorGithubLogin, &authorAvatarURL, &authorRemark, &authorKind, &kind,
 		&clientMessageID, &contentJSON, &plainText, &replyToMessageID, &createdAt, &editedAt,

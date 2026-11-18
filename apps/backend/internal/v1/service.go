@@ -43,7 +43,7 @@ type Repository interface {
 	AddGroupMembers(ctx context.Context, actorID, conversationID string, userIDs []string, now time.Time) (GroupConversationSummary, error)
 	RemoveGroupMember(ctx context.Context, actorID, conversationID, targetUserID string, now time.Time) (GroupConversationSummary, error)
 	LeaveGroupConversation(ctx context.Context, actorID, conversationID string, now time.Time) error
-	MarkConversationRead(ctx context.Context, actorID, conversationID string, now time.Time) (string, error)
+	MarkConversationRead(ctx context.Context, actorID, conversationID, messageID string, now time.Time) (ConversationReadResult, error)
 	SendConversationTyping(ctx context.Context, actorID, conversationID, kind, state string, now time.Time) (string, error)
 	EditMessage(ctx context.Context, actorID, messageID, plainText string, now time.Time) error
 	ForwardMessages(ctx context.Context, actorID, targetConversationID string, messageIDs []string, now time.Time) ([]string, error)
@@ -278,16 +278,23 @@ func (s *Service) RemoveGroupMember(ctx context.Context, actorID, conversationID
 	return s.repo.RemoveGroupMember(ctx, actorID, conversationID, targetUserID, s.now())
 }
 
-func (s *Service) MarkConversationRead(ctx context.Context, actorID, conversationID string) (string, error) {
+func (s *Service) MarkConversationRead(ctx context.Context, actorID, conversationID string, requestedMessageID *string) (ConversationReadResult, error) {
 	actorID = strings.TrimSpace(actorID)
 	conversationID = strings.TrimSpace(conversationID)
 	if actorID == "" {
-		return "", ErrForbidden
+		return ConversationReadResult{}, ErrForbidden
 	}
 	if conversationID == "" {
-		return "", ErrInvalidInput
+		return ConversationReadResult{}, ErrInvalidInput
 	}
-	return s.repo.MarkConversationRead(ctx, actorID, conversationID, s.now())
+	messageID := ""
+	if requestedMessageID != nil {
+		messageID = strings.TrimSpace(*requestedMessageID)
+		if messageID == "" || len(messageID) > 128 {
+			return ConversationReadResult{}, ErrInvalidInput
+		}
+	}
+	return s.repo.MarkConversationRead(ctx, actorID, conversationID, messageID, s.now())
 }
 
 func (s *Service) SendConversationTyping(ctx context.Context, actorID, conversationID, kind, state string) (string, error) {

@@ -728,7 +728,7 @@ describe("DualLane v1.0 QA Acceptance Suite", () => {
       expect(useWorkspaceStore.getState().messagesByConv["conv_new_grp"]).toHaveLength(2);
       expect(useWorkspaceStore.getState().conversations["conv_new_grp"]?.unreadCount).toBe(1);
 
-      // 3. Even without server conversation payload, system messages and recalls never inflate unreadCount
+      // 3. A system message leaves the unread badge intact. Recalling the only unread message clears it.
       ws.emitFrame({
         type: "event",
         event: {
@@ -768,7 +768,7 @@ describe("DualLane v1.0 QA Acceptance Suite", () => {
           },
         },
       });
-      expect(useWorkspaceStore.getState().conversations["conv_new_grp"]?.unreadCount).toBe(1);
+      expect(useWorkspaceStore.getState().conversations["conv_new_grp"]?.unreadCount).toBe(0);
     } finally {
       vi.restoreAllMocks();
       (globalThis as unknown as { window: unknown }).window = origWindow;

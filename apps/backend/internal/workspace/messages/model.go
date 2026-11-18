@@ -176,12 +176,12 @@ type MessageThreadSummary struct {
 	RecentReplies []ThreadPreviewReply `json:"recentReplies,omitempty"`
 }
 
-// Message is the safe product projection. Sequence and Revision stay out of
-// the public projection because the current HTTP contract does not expose
-// persistence cursors or internal compare-and-swap state.
+// Message is the safe product projection. CreationSeq is the message.created
+// position for the authorized history. Internal compare-and-swap state stays private.
 type Message struct {
 	ID                   string               `json:"id"`
 	ConversationID       string               `json:"conversationId"`
+	CreationSeq          int64                `json:"creationSeq,omitempty"`
 	TopicID              string               `json:"topicId,omitempty"`
 	ThreadRootID         string               `json:"threadRootId,omitempty"`
 	ThreadTitle          string               `json:"threadTitle,omitempty"`
@@ -220,7 +220,7 @@ type MessagePin struct {
 }
 
 // MessageRecord is a storage projection and must not be returned directly by
-// a transport. EventSeq is the latest persisted event sequence for the row;
+// a transport. EventSeq is the persisted creation event sequence for the row;
 // Revision is derived from the existing recalled state until a future additive
 // migration gives messages an explicit revision column.
 type MessageRecord struct {
@@ -411,6 +411,7 @@ func projectMessage(record MessageRecord, attachments []AttachmentRecord, reacti
 	message := Message{
 		ID:                  record.ID,
 		ConversationID:      record.ConversationID,
+		CreationSeq:         record.EventSeq,
 		TopicID:             record.TopicID,
 		ThreadRootID:        record.ThreadRootID,
 		ThreadTitle:         record.ThreadTitle,

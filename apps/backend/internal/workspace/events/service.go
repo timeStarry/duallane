@@ -377,7 +377,18 @@ func projectPayload(eventType string, payload map[string]any, actor *auth.Actor)
 		}
 		return result
 	case "conversation.read":
-		return stringFields(payload, "conversationId", "userId", "readAt")
+		result := stringFields(payload, "conversationId", "userId", "readAt")
+		if actor != nil && actor.ID == stringField(payload, "userId") {
+			for _, key := range []string{"lastReadMessageId", "firstUnreadMessageId"} {
+				copyNullableStringField(result, payload, key)
+			}
+			for _, key := range []string{"lastReadSeq", "unreadCount"} {
+				if number, ok := safeIntField(payload[key]); ok {
+					result[key] = number
+				}
+			}
+		}
+		return result
 	case "conversation.typing":
 		return stringFields(payload, "conversationId", "userId", "displayName", "kind", "state", "expiresAt")
 	case "emote.settings.updated":
@@ -574,7 +585,7 @@ func safeConversation(value any, viewerID string) (map[string]any, bool) {
 		return nil, false
 	}
 	result := stringFields(conversation, "id", "spaceId", "type", "title", "displayTitle", "retentionText", "createdAt", "lastActivityAt", "lastMessagePlainText", "notificationLevel")
-	for _, key := range []string{"avatarEmoji", "lastMessageAt", "lastReadMessageId", "lastReadAt"} {
+	for _, key := range []string{"avatarEmoji", "lastMessageAt", "firstUnreadMessageId", "lastReadMessageId", "lastReadAt"} {
 		copyNullableStringField(result, conversation, key)
 	}
 	for _, key := range []string{"retentionCount", "messageCount", "memberCount", "unreadCount", "lastReadSeq"} {
@@ -664,6 +675,9 @@ func safeMessage(value any, viewerID string) (map[string]any, bool) {
 	}
 	if cnt, ok := safeIntField(message["threadReplyCount"]); ok && cnt > 0 {
 		result["threadReplyCount"] = cnt
+	}
+	if seq, ok := safeIntField(message["creationSeq"]); ok && seq > 0 {
+		result["creationSeq"] = seq
 	}
 	if rawPreviews, ok := message["threadPreviewReplies"].([]any); ok && len(rawPreviews) > 0 {
 		previews := make([]any, 0, len(rawPreviews))

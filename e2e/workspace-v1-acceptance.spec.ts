@@ -1,5 +1,7 @@
 import fs from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import { expect, test, type Page } from "@playwright/test";
+import type { CustomEmoteDTO, EmoteLibraryDTO } from "../apps/web/src/shared/lib/api-v1";
 
 function buildWorkspacePngBuffer(): Buffer {
   const basePng = Buffer.from(
@@ -113,6 +115,113 @@ async function assertNarrowWorkspaceNoOverlap(page: Page, label: string) {
   return assertWorkspaceNoOverlapAtWidth(page, 320, label);
 }
 
+test("picker shows ordered individual favorites and sends Go built-in stickers", async ({ page }) => {
+  const runId = randomUUID();
+  await page.goto("/workspace");
+  await page.getByRole("button", { name: "使用 GitHub 登录共享空间" }).click();
+  await expect(page.getByRole("main", { name: "DualLane 工作台" })).toBeVisible();
+
+  const bootstrap = await page.request.get("/api/v1/bootstrap");
+  expect(bootstrap.ok()).toBe(true);
+  const { conversations } = await bootstrap.json() as { conversations: Array<{ id: string; type: string }> };
+  const conversationId = conversations.find((conversation) => conversation.type === "saved")?.id;
+  expect(conversationId).toBeTruthy();
+
+  const source = await page.request.post("/api/workspace/messages", {
+    data: {
+      conversationId,
+      clientMessageId: runId,
+      content: {
+        format: "duallane.message+json;v=1",
+        plainText: "[bili:doge]",
+        blocks: [{ type: "text", text: "[bili:doge]" }],
+      },
+    },
+  });
+  expect(source.status()).toBe(201);
+  const { message } = await source.json() as { message: { id: string } };
+  const favorite = await page.request.post("/api/workspace/me/emotes/favorite", {
+    data: { messageId: message.id, emoteKey: "bili:doge" },
+  });
+  expect(favorite.status()).toBe(201);
+  const { emote: dual } = await favorite.json() as { emote: CustomEmoteDTO };
+  expect(dual.kind).toBe("builtin");
+  expect(dual.sourceType).toBeUndefined();
+  const packName = `测试贴纸合集 ${runId.slice(0, 8)}`;
+  const pack = await page.request.post("/api/workspace/me/emote-collections", {
+    data: { name: packName, emoteIds: [dual.id] },
+  });
+  expect(pack.status()).toBe(201);
+  const { collection } = await pack.json() as { collection: { id: string } };
+  const upload = await page.request.post(`/api/workspace/me/emotes?collectionId=${collection.id}&addToLibrary=false`, {
+    headers: { "Content-Type": "image/png", "X-DualLane-File-Name": `pack-only-${runId.slice(0, 8)}.png` },
+    data: buildWorkspacePngBuffer(),
+  });
+  expect(upload.status()).toBe(201);
+  const { emote: packOnly } = await upload.json() as { emote: CustomEmoteDTO };
+
+  const libraryResponse = await page.request.get("/api/workspace/me/emote-library");
+  expect(libraryResponse.ok()).toBe(true);
+  const library = await libraryResponse.json() as EmoteLibraryDTO;
+  expect(library.emotes.map((emote) => emote.id)).toContain(packOnly.id);
+  const serverFavorites = library.entries.flatMap((entry) => entry.type === "emote" && entry.emote ? [entry.emote] : []);
+  expect(serverFavorites.map((emote) => emote.id)).toContain(dual.id);
+  const serverPack = library.collections.find((pack) => pack.id === collection.id);
+  expect(serverPack?.items.map((emote) => emote.id)).toEqual(expect.arrayContaining([dual.id, packOnly.id]));
+
+  // New hidden-pack favorites are disabled. This fixture represents a preexisting Go projection.
+  const oldBuiltIn: CustomEmoteDTO = {
+    ...dual,
+    id: randomUUID(),
+    label: "历史 QQ 微笑",
+    emoteKey: "qq:smile",
+    token: "[qq:smile]",
+    src: "/emotes/qq/smile.gif",
+  };
+  const favorites = [oldBuiltIn, ...serverFavorites];
+  expect(favorites.map((emote) => emote.id)).not.toContain(packOnly.id);
+  await page.route("**/api/workspace/me/emote-library", (route) => route.fulfill({
+    json: {
+      ...library,
+      entries: [{ id: `emote:${oldBuiltIn.id}`, type: "emote", emote: oldBuiltIn }, ...library.entries],
+      emotes: [...library.emotes, oldBuiltIn],
+    },
+  }));
+
+  await page.goto(`/workspace/chat/${conversationId}`);
+  const openPicker = page.getByRole("button", { name: "表情与贴纸", exact: true });
+  await openPicker.click();
+  const picker = page.getByRole("dialog").filter({ has: page.getByTestId("emote-picker-tab-strip") });
+  await picker.getByRole("button", { name: "收藏", exact: true }).click();
+  await expect(picker.getByText(`收藏贴纸 (${favorites.length})`, { exact: true })).toBeVisible();
+  const stickerButtons = picker.getByRole("button", { name: /^发送贴纸 /u });
+  await expect(stickerButtons).toHaveCount(favorites.length);
+  expect(await stickerButtons.evaluateAll((buttons) => buttons.map((button) => button.getAttribute("title"))))
+    .toEqual(favorites.map((emote) => emote.label));
+
+  await picker.getByRole("button", { name: packName, exact: true }).click();
+  await expect(picker.getByRole("button", { name: `发送贴纸 ${packOnly.label}` })).toBeVisible();
+  await expect(picker.getByRole("button", { name: `发送贴纸 ${dual.label}` })).toBeVisible();
+  await picker.getByRole("button", { name: "收藏", exact: true }).click();
+
+  for (const sticker of [oldBuiltIn, dual]) {
+    const sent = page.waitForResponse((response) => response.request().method() === "POST" &&
+      new URL(response.url()).pathname === "/api/workspace/messages");
+    await picker.getByRole("button", { name: `发送贴纸 ${sticker.label}` }).click();
+    const sentResponse = await sent;
+    expect(sentResponse.request().postDataJSON().content.blocks).toEqual([{ type: "text", text: sticker.token }]);
+    expect(sentResponse.status()).toBe(201);
+    await openPicker.click();
+    await picker.getByRole("button", { name: "收藏", exact: true }).click();
+  }
+
+  await picker.getByRole("button", { name: "管理表情与贴纸包" }).click();
+  const studio = page.getByRole("dialog", { name: "表情与贴纸工坊" });
+  await studio.getByRole("radio", { name: `收藏贴纸 (${favorites.length})` }).click();
+  await expect(studio.getByAltText(oldBuiltIn.label)).toBeVisible();
+  await expect(studio.getByAltText(packOnly.label)).toHaveCount(0);
+});
+
 test.describe("DualLane v1.0 Shared Workspace Login, Search, File Transfer & 320px Responsive Acceptance", () => {
   test("logs into Shared Workspace, onboards peer, exchanges real-time messages & binary/image attachments, downloads byte-for-byte files, searches filenames, and fits 320px cleanly", async ({
     browser,
@@ -193,14 +302,49 @@ test.describe("DualLane v1.0 Shared Workspace Login, Search, File Transfer & 320
       await expect(memberGroupBtn).toBeVisible();
       await expect(memberGroupBtn.getByTestId("unread-badge")).toHaveCount(0);
 
-      // 5. Bidirectional real-time text delivery + accurate unread badge count (1 chat msg + 1 system msg => badge 1, NOT 3!)
+      // 5. History retrieval preserves unread state. A receipt acknowledges only
+      // the displayed message, even if newer messages already exist on the server.
       const ownerComposer = pageOwner.getByPlaceholder("发送消息到 v1.0 双端实时验收群…");
-      await ownerComposer.fill("共享空间双端实时送达验收通过 2026");
-      await ownerComposer.press("Enter");
+      const sendText = async (value: string) => {
+        const saved = pageOwner.waitForResponse((response) => response.ok() && response.request().method() === "POST" && new URL(response.url()).pathname === "/api/workspace/messages");
+        await ownerComposer.fill(value);
+        await ownerComposer.press("Enter");
+        const body = await (await saved).json();
+        return body.message as { id: string; conversationId: string };
+      };
+      const first = await sendText("第一条测试未读");
+      const second = await sendText("共享空间双端实时送达验收通过 2026");
+      expect(first.conversationId).toBe(second.conversationId);
+      const readPath = `/api/v1/conversations/${first.conversationId}/read`;
+      const historyPath = `/api/workspace/conversations/${first.conversationId}/messages`;
+      const readState = async () => {
+        const response = await pageMember.request.get("/api/v1/bootstrap");
+        expect(response.ok()).toBe(true);
+        const bootstrap = await response.json() as { conversations: Array<{ id: string; unreadCount: number; firstUnreadMessageId: string | null; lastReadMessageId: string | null }> };
+        return bootstrap.conversations.find((row) => row.id === first.conversationId);
+      };
+      await expect(memberGroupBtn.getByTestId("unread-badge")).toHaveText("2");
+      expect((await pageMember.request.get(historyPath)).ok()).toBe(true);
+      expect(await readState()).toMatchObject({ unreadCount: 2, firstUnreadMessageId: first.id, lastReadMessageId: null });
+
+      const partial = await pageMember.request.post(readPath, { data: { messageId: first.id } });
+      expect(partial.status()).toBe(200);
+      expect(await partial.json()).toMatchObject({ lastReadMessageId: first.id, firstUnreadMessageId: second.id, unreadCount: 1 });
+      const invalid = await pageMember.request.post(readPath, { data: { messageId: "nonexistent-message" } });
+      expect(invalid.status()).toBe(404);
+      expect(await readState()).toMatchObject({ lastReadMessageId: first.id, firstUnreadMessageId: second.id, unreadCount: 1 });
 
       await expect(memberGroupBtn.getByTestId("unread-badge")).toHaveText("1");
+      await pageMember.bringToFront();
       await memberGroupBtn.click();
+      const timeline = pageMember.getByTestId("workspace-timeline-scroll");
+      const boundary = timeline.getByRole("separator", { name: "以下为新消息" });
+      await expect(boundary).toBeVisible();
+      await expect(timeline.locator(`[role="separator"] + [data-message-id="${second.id}"]`)).toHaveCount(1);
       await expect(memberGroupBtn.getByTestId("unread-badge")).toHaveCount(0);
+      const stale = await pageMember.request.post(readPath, { data: { messageId: first.id } });
+      expect(stale.status()).toBe(200);
+      expect(await stale.json()).toMatchObject({ lastReadMessageId: second.id, firstUnreadMessageId: null, unreadCount: 0 });
 
       await expect(
         pageMember.locator("section").getByText("共享空间双端实时送达验收通过 2026")

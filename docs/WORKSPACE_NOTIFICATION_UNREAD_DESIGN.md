@@ -92,7 +92,10 @@ Rules:
   short delay.
 - If the window is inactive or conversation is not selected, new messages count
   as unread.
-- System messages count only when they represent conversation-visible facts.
+- The main conversation count includes other people's visible messages after
+  the read anchor. System notices, personal hides, recalls, deleted messages,
+  and replies confined to a topic or thread are excluded. A reply also sent to
+  the main timeline follows the ordinary message rule.
 - Actor-local transfer rejections never count as unread conversation messages.
 
 P0 may keep unread counts lightweight, but the schema and endpoint should
@@ -100,9 +103,9 @@ already reserve last-read fields.
 
 ## 6. Mark Read Behavior
 
-P0 endpoint:
+Current endpoint:
 
-- `POST /api/workspace/conversations/:conversationId/read`
+- `POST /api/v1/conversations/:conversationId/read`
 
 Request:
 
@@ -114,16 +117,30 @@ Request:
 
 Behavior:
 
-- Backend validates conversation membership.
-- Backend updates `last_read_message_id` or equivalent.
-- Conversation row unread count clears or decreases.
-- No operation record is required for normal read markers.
+- The backend checks membership and validates the anchor against the visible main
+  timeline. It advances the read marker by message creation sequence. Records
+  without a sequence use the existing timestamp and message ID order.
+- History and new-message events provide `creationSeq` when available. A client
+  at the end of a displayed page acknowledges the message with the highest
+  displayed sequence. This includes messages that committed later with an older
+  timestamp.
+- The receipt carries `lastReadMessageId`, `readAt`, `lastReadSeq`,
+  `unreadCount`, and `firstUnreadMessageId`. A repeated or older anchor returns
+  the current marker. A bodyless request remains available for an explicit
+  mark-all-read command and for older clients.
+- The reader's realtime `conversation.read` projection carries the personal
+  count and anchors. Other participants receive the existing receipt timestamp.
+- History, conversation list, and background prefetch GETs leave the marker
+  untouched. Normal read markers do not create an operation record.
 
 Client behavior:
 
-- Mark read when active conversation is opened and messages are visible.
-- Debounce mark-read calls.
-- Do not mark read while offline.
+- After the latest page renders, submit the last displayed message ID when the
+  current conversation is in the foreground and at its latest position.
+- Coalesce pending mark-read calls and keep unread badges until confirmation.
+- Entries via search or history retain the reading position. The new-message
+  divider uses the entry snapshot's first unread ID and does not count newly
+  loaded history as live arrivals.
 - On reconnect, reconcile read state from conversation list response.
 
 ## 7. Conversation Row Badges
@@ -261,13 +278,15 @@ P0 endpoints:
 - `POST /api/workspace/conversations/:conversationId/read`
 - `PATCH /api/workspace/conversations/:conversationId/notification`
 
-Conversation list response:
+The current bootstrap and realtime conversation summary include:
 
 ```json
 {
   "id": "conv_01",
   "displayTitle": "Design Review",
   "unreadCount": 3,
+  "firstUnreadMessageId": "msg_02",
+  "lastReadMessageId": "msg_01",
   "mentionCount": 1,
   "notificationLevel": "all"
 }

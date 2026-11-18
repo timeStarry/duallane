@@ -86,7 +86,6 @@ func (r *PGRepository) ListConversationRecords(ctx context.Context, spaceID, act
 		return nil, internalError("list conversations", errors.New("workspace postgres pool is required"))
 	}
 	rows, err := r.pool.Query(ctx, conversationSelect+`WHERE c.space_id = $1 AND cm.user_id = $2 AND cm.removed_at IS NULL
-		GROUP BY c.id, c.space_id, c.type, c.title, c.avatar_emoji, c.retention_count, c.created_at, cm.last_read_message_id, cm.last_read_at, cm.last_read_seq, cm.notification_level
 		ORDER BY last_activity_at DESC, c.created_at DESC, c.id DESC`, spaceID, actorID)
 	if err != nil {
 		return nil, internalError("list conversations", err)
@@ -103,8 +102,7 @@ func (r *PGRepository) GetVisibleConversationRecord(ctx context.Context, spaceID
 	if r == nil || r.pool == nil {
 		return nil, internalError("get conversation", errors.New("workspace postgres pool is required"))
 	}
-	row := r.pool.QueryRow(ctx, conversationSelect+`WHERE c.space_id = $1 AND c.id = $2 AND cm.user_id = $3 AND cm.removed_at IS NULL
-		GROUP BY c.id, c.space_id, c.type, c.title, c.avatar_emoji, c.retention_count, c.created_at, cm.last_read_message_id, cm.last_read_at, cm.last_read_seq, cm.notification_level`, spaceID, conversationID, actorID)
+	row := r.pool.QueryRow(ctx, conversationSelect+`WHERE c.space_id = $1 AND c.id = $2 AND cm.user_id = $3 AND cm.removed_at IS NULL`, spaceID, conversationID, actorID)
 	record, err := scanConversationRecord(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
@@ -363,7 +361,6 @@ func (t *pgTx) LookupActor(ctx context.Context, spaceID, userID string) (*auth.A
 
 func (t *pgTx) ListConversationRecords(ctx context.Context, spaceID, actorID string) ([]ConversationRecord, error) {
 	rows, err := t.tx.Query(ctx, conversationSelect+`WHERE c.space_id = $1 AND cm.user_id = $2 AND cm.removed_at IS NULL
-		GROUP BY c.id, c.space_id, c.type, c.title, c.avatar_emoji, c.retention_count, c.created_at, cm.last_read_message_id, cm.last_read_at, cm.last_read_seq, cm.notification_level
 		ORDER BY last_activity_at DESC, c.created_at DESC, c.id DESC`, spaceID, actorID)
 	if err != nil {
 		return nil, internalError("list conversations", err)
@@ -377,8 +374,7 @@ func (t *pgTx) ListConversationRecords(ctx context.Context, spaceID, actorID str
 }
 
 func (t *pgTx) GetVisibleConversationRecord(ctx context.Context, spaceID, actorID, conversationID string) (*ConversationRecord, error) {
-	row := t.tx.QueryRow(ctx, conversationSelect+`WHERE c.space_id = $1 AND c.id = $2 AND cm.user_id = $3 AND cm.removed_at IS NULL
-		GROUP BY c.id, c.space_id, c.type, c.title, c.avatar_emoji, c.retention_count, c.created_at, cm.last_read_message_id, cm.last_read_at, cm.last_read_seq, cm.notification_level`, spaceID, conversationID, actorID)
+	row := t.tx.QueryRow(ctx, conversationSelect+`WHERE c.space_id = $1 AND c.id = $2 AND cm.user_id = $3 AND cm.removed_at IS NULL`, spaceID, conversationID, actorID)
 	record, err := scanConversationRecord(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
@@ -669,39 +665,68 @@ func (t *pgTx) CreateSystemMessage(ctx context.Context, record SystemMessageInse
 }
 
 func (t *pgTx) MarkConversationRead(ctx context.Context, spaceID, conversationID, userID string, now time.Time) (ReadMarker, error) {
-	var messageID *string
-	var messageAt *time.Time
-	var sequence int64
-	err := t.tx.QueryRow(ctx, `
-		SELECT latest.id, latest.created_at, COALESCE(latest.event_seq, (SELECT COALESCE(MAX(seq), 0) FROM workspace_events WHERE space_id = $1))
-		FROM (VALUES (1)) anchor(one)
-		LEFT JOIN LATERAL (
-			SELECT m.id, m.created_at, we.seq AS event_seq
-			FROM messages m
-			LEFT JOIN workspace_events we ON we.space_id = m.space_id AND we.conversation_id = m.conversation_id
-				AND we.type = 'message.created' AND we.target_id = m.id
-			WHERE m.space_id = $1 AND m.conversation_id = $2 AND m.topic_id IS NULL AND m.deleted_at IS NULL
-			ORDER BY m.created_at DESC, we.seq DESC NULLS LAST, m.id DESC LIMIT 1
-		) latest ON TRUE`, spaceID, conversationID).Scan(&messageID, &messageAt, &sequence)
-	if err != nil {
-		return ReadMarker{}, internalError("resolve conversation read marker", err)
-	}
-	if messageAt == nil {
-		messageAt = timePtr(now.UTC())
-	}
-	result, err := t.tx.Exec(ctx, `UPDATE conversation_members
-		SET last_read_message_id = $1, last_read_at = $2, last_read_seq = $3
-		WHERE conversation_id = $4 AND user_id = $5 AND removed_at IS NULL
-		AND (last_read_seq IS NULL OR last_read_seq <= $3)`, nullableStringArg(messageID), messageAt.UTC(), sequence, conversationID, userID)
+	advanced, err := AdvanceTimelineReadMarker(ctx, t.tx, spaceID, conversationID, userID, "")
 	if err != nil {
 		return ReadMarker{}, internalError("mark conversation read", err)
 	}
-	if result.RowsAffected() == 0 {
-		// A newer marker won a concurrent request. The operation is still
-		// idempotently successful; callers will project the current row.
-		return ReadMarker{MessageID: messageID, ReadAt: *messageAt, Sequence: sequence}, nil
+	if advanced != nil {
+		return *advanced, nil
 	}
-	return ReadMarker{MessageID: messageID, ReadAt: *messageAt, Sequence: sequence}, nil
+	var marker ReadMarker
+	err = t.tx.QueryRow(ctx, `SELECT last_read_message_id, COALESCE(last_read_at, $3), COALESCE(last_read_seq, 0)
+		FROM conversation_members WHERE conversation_id = $1 AND user_id = $2 AND removed_at IS NULL`,
+		conversationID, userID, now.UTC()).Scan(&marker.MessageID, &marker.ReadAt, &marker.Sequence)
+	if err != nil {
+		return ReadMarker{}, internalError("read conversation marker", err)
+	}
+	return marker, nil
+}
+
+// AdvanceTimelineReadMarker is shared by both read endpoints after membership
+// authorization. An empty target acknowledges the latest visible creation. A
+// missing explicit target returns pgx.ErrNoRows, and nil means no advancement.
+func AdvanceTimelineReadMarker(ctx context.Context, tx pgx.Tx, spaceID, conversationID, userID, requestedID string) (*ReadMarker, error) {
+	var messageID string
+	var messageAt time.Time
+	var sequence *int64
+	err := tx.QueryRow(ctx, `
+		SELECT m.id, m.created_at, MAX(we.seq) AS creation_seq
+		FROM messages m
+		JOIN conversation_members cm ON cm.conversation_id = m.conversation_id AND cm.user_id = $3 AND cm.removed_at IS NULL
+		LEFT JOIN workspace_events we ON we.space_id = m.space_id AND we.conversation_id = m.conversation_id
+			AND we.type = 'message.created' AND we.target_id = m.id
+		WHERE m.space_id = $1 AND m.conversation_id = $2
+			AND ($4 = '' OR m.id = $4) AND `+MainTimelineVisibleMessageSQL+`
+		GROUP BY m.id, m.created_at
+		ORDER BY creation_seq DESC NULLS LAST, m.created_at DESC, m.id DESC LIMIT 1
+	`, spaceID, conversationID, userID, requestedID).Scan(&messageID, &messageAt, &sequence)
+	if errors.Is(err, pgx.ErrNoRows) && requestedID == "" {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var marker ReadMarker
+	err = tx.QueryRow(ctx, `
+		UPDATE conversation_members cm
+		SET last_read_message_id = $1, last_read_at = $2,
+			last_read_seq = GREATEST(cm.last_read_seq, $3::bigint)
+		FROM conversations c
+		WHERE c.id = cm.conversation_id AND c.space_id = $6
+			AND cm.conversation_id = $4 AND cm.user_id = $5 AND cm.removed_at IS NULL
+			AND CASE WHEN $3::bigint IS NOT NULL AND cm.last_read_seq IS NOT NULL THEN $3 > cm.last_read_seq
+				ELSE COALESCE((
+					SELECT (previous.created_at, previous.id) < ($2, $1) FROM messages previous
+					WHERE previous.id = cm.last_read_message_id AND previous.space_id = c.space_id
+						AND previous.conversation_id = cm.conversation_id
+				), cm.last_read_at IS NULL OR cm.last_read_at <= $2)
+			END
+		RETURNING cm.last_read_message_id, cm.last_read_at, COALESCE(cm.last_read_seq, 0)
+	`, messageID, messageAt, sequence, conversationID, userID, spaceID).Scan(&marker.MessageID, &marker.ReadAt, &marker.Sequence)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	return &marker, err
 }
 
 func (t *pgTx) UpdateNotificationLevel(ctx context.Context, spaceID, conversationID, userID, level string) error {
@@ -839,20 +864,28 @@ func (t *pgTx) newID() (string, error) {
 
 const conversationSelect = `SELECT
 	c.id, c.space_id, c.type, c.title, c.avatar_emoji, c.retention_count,
-	c.created_at, COALESCE(MAX(m.created_at), c.created_at) AS last_activity_at,
-	COUNT(m.id) FILTER (WHERE m.deleted_at IS NULL AND m.topic_id IS NULL) AS message_count,
+	c.created_at, COALESCE(history.latest, c.created_at) AS last_activity_at,
+	history.count AS message_count,
 	cm.last_read_message_id, cm.last_read_at, cm.last_read_seq, cm.notification_level,
-	COUNT(m.id) FILTER (WHERE m.deleted_at IS NULL AND m.topic_id IS NULL AND m.kind <> 'system' AND (m.author_id IS NULL OR m.author_id <> cm.user_id)
-		AND ((cm.last_read_seq IS NOT NULL AND EXISTS (SELECT 1 FROM workspace_events we WHERE we.space_id = c.space_id AND we.type = 'message.created' AND we.target_id = m.id AND we.seq > cm.last_read_seq))
-			OR (cm.last_read_seq IS NULL AND (cm.last_read_at IS NULL OR m.created_at > cm.last_read_at)))) AS unread_count
+	unread.count AS unread_count, unread.first_message_id
 FROM conversations c
 INNER JOIN conversation_members cm ON cm.conversation_id = c.id
-LEFT JOIN messages m ON m.conversation_id = c.id AND m.space_id = c.space_id
-	AND m.topic_id IS NULL AND m.deleted_at IS NULL
+CROSS JOIN LATERAL (
+	SELECT COUNT(*) AS count, MAX(m.created_at) AS latest
+	FROM messages m WHERE m.conversation_id = c.id AND m.space_id = c.space_id
+		AND m.topic_id IS NULL AND m.deleted_at IS NULL
+) history
+CROSS JOIN LATERAL (` + TimelineUnreadSQL + `) unread
 `
 
 func visibleConversationForActor(ctx context.Context, q botaccess.Queryer, spaceID, actorID string, record ConversationRecord) (bool, error) {
-	if record.Type != string(ConversationTypeDirect) {
+	return PassesBotConversationPolicy(ctx, q, spaceID, actorID, record.ID, record.Type)
+}
+
+// PassesBotConversationPolicy checks the extra restriction on a direct Bot
+// conversation. The caller must first verify the actor's space and membership.
+func PassesBotConversationPolicy(ctx context.Context, q botaccess.Queryer, spaceID, actorID, conversationID, conversationType string) (bool, error) {
+	if conversationType != string(ConversationTypeDirect) {
 		return true, nil
 	}
 	var botUserID string
@@ -862,7 +895,7 @@ func visibleConversationForActor(ctx context.Context, q botaccess.Queryer, space
 		INNER JOIN workspace_agent_bots b ON b.space_id = $1 AND b.bot_user_id = cm.user_id AND b.status <> 'deleted'
 		WHERE cm.conversation_id = $2 AND cm.user_id <> $3 AND cm.removed_at IS NULL
 		LIMIT 1
-	`, spaceID, record.ID, actorID).Scan(&botUserID)
+	`, spaceID, conversationID, actorID).Scan(&botUserID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return true, nil
 	}
@@ -999,7 +1032,7 @@ func scanConversationRecord(row rowScanner) (ConversationRecord, error) {
 	var record ConversationRecord
 	var avatar *string
 	var createdAt, lastActivity time.Time
-	if err := row.Scan(&record.ID, &record.SpaceID, &record.Type, &record.Title, &avatar, &record.RetentionCount, &createdAt, &lastActivity, &record.MessageCount, &record.LastReadMessageID, &record.LastReadAt, &record.LastReadSeq, &record.NotificationLevel, &record.UnreadCount); err != nil {
+	if err := row.Scan(&record.ID, &record.SpaceID, &record.Type, &record.Title, &avatar, &record.RetentionCount, &createdAt, &lastActivity, &record.MessageCount, &record.LastReadMessageID, &record.LastReadAt, &record.LastReadSeq, &record.NotificationLevel, &record.UnreadCount, &record.FirstUnreadMessageID); err != nil {
 		return ConversationRecord{}, err
 	}
 	record.AvatarEmoji = avatar

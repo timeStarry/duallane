@@ -22,24 +22,25 @@ import (
 )
 
 type stubRepo struct {
-	commands       []BotCommand
-	savedID        string
-	group          GroupConversationSummary
-	editedActorID  string
-	editedMsgID    string
-	editedText     string
-	lastReadConvID string
-	typingConvID   string
-	typingKind     string
-	typingState    string
-	botProfile     BotProfileResult
-	botAvatar      BotAvatarPayload
-	unboundTokenID string
-	announcement   SystemAnnouncement
-	ackedByUser    map[string]string
-	boundByUser    map[string]string
-	challenges     map[string]EmailChallengeStoreRecord
-	mobileRelease  MobileClientRelease
+	commands          []BotCommand
+	savedID           string
+	group             GroupConversationSummary
+	editedActorID     string
+	editedMsgID       string
+	editedText        string
+	lastReadConvID    string
+	lastReadMessageID string
+	typingConvID      string
+	typingKind        string
+	typingState       string
+	botProfile        BotProfileResult
+	botAvatar         BotAvatarPayload
+	unboundTokenID    string
+	announcement      SystemAnnouncement
+	ackedByUser       map[string]string
+	boundByUser       map[string]string
+	challenges        map[string]EmailChallengeStoreRecord
+	mobileRelease     MobileClientRelease
 }
 
 func (s *stubRepo) GetBootstrap(_ context.Context, actorID string, _ time.Time) (V1BootstrapResponse, error) {
@@ -121,9 +122,14 @@ func (s *stubRepo) RemoveGroupMember(_ context.Context, _, convID, targetUserID 
 	s.group.MemberIDs = next
 	return s.group, nil
 }
-func (s *stubRepo) MarkConversationRead(_ context.Context, _, convID string, now time.Time) (string, error) {
+func (s *stubRepo) MarkConversationRead(_ context.Context, _, convID, messageID string, now time.Time) (ConversationReadResult, error) {
 	s.lastReadConvID = convID
-	return now.UTC().Format(time.RFC3339Nano), nil
+	s.lastReadMessageID = messageID
+	result := ConversationReadResult{ReadAt: now.UTC().Format(time.RFC3339Nano)}
+	if messageID != "" {
+		result.LastReadMessageID = &messageID
+	}
+	return result, nil
 }
 func (s *stubRepo) SendConversationTyping(_ context.Context, _, convID, kind, state string, now time.Time) (string, error) {
 	s.typingConvID = convID
@@ -759,6 +765,24 @@ func TestReadReceiptTypingBotProfileAndGroupRemoveRoutes(t *testing.T) {
 	r.ServeHTTP(readRec, readReq)
 	if readRec.Code != http.StatusOK || repo.lastReadConvID != "conv_dm_1" {
 		t.Fatalf("expected 200 on mark read, got %d (%s)", readRec.Code, readRec.Body.String())
+	}
+	for _, tc := range []struct {
+		body   string
+		status int
+	}{
+		{`{"messageId":"msg_latest_visible"}`, http.StatusOK},
+		{`{"messageId":" "}`, http.StatusBadRequest},
+		{`{"messageId":123}`, http.StatusBadRequest},
+		{`{} {}`, http.StatusBadRequest},
+	} {
+		response := httptest.NewRecorder()
+		r.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/v1/conversations/conv_dm_1/read", strings.NewReader(tc.body)))
+		if response.Code != tc.status || repo.lastReadMessageID != "msg_latest_visible" {
+			t.Fatalf("read body %s: got %d (%s), last requested message %q", tc.body, response.Code, response.Body.String(), repo.lastReadMessageID)
+		}
+		if tc.status == http.StatusOK && !strings.Contains(response.Body.String(), `"lastReadMessageId":"msg_latest_visible"`) {
+			t.Fatalf("read receipt omitted anchor: %s", response.Body.String())
+		}
 	}
 
 	typReq := httptest.NewRequest(http.MethodPost, "/api/v1/conversations/conv_dm_1/typing", bytes.NewBufferString(`{"state":"typing"}`))
