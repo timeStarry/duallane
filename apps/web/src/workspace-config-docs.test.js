@@ -3,6 +3,7 @@ import { readFile as readRawFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { readWorkspaceBrowserConfig } from "../../../scripts/backend/workspace-browser-config.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "../../..");
@@ -61,7 +62,7 @@ describe("workspace configuration docs", () => {
     const devRunner = await readFile(path.join(repoRoot, "scripts", "dev", "go-dev.mjs"), "utf8");
     const defaultPlaywright = await readFile(path.join(repoRoot, "playwright.config.ts"), "utf8");
     const defaultTestServer = await readFile(path.join(repoRoot, "e2e", "support", "test-server.mjs"), "utf8");
-    const workspacePlaywright = await readFile(path.join(repoRoot, "playwright.workspace-go.config.ts"), "utf8");
+    const workspacePlaywright = readWorkspaceBrowserConfig();
     const rootManifest = JSON.parse(rootPackage);
     const webManifest = JSON.parse(webPackage);
 
@@ -79,8 +80,8 @@ describe("workspace configuration docs", () => {
     expect(defaultPlaywright).toContain("node e2e/support/test-server.mjs");
     expect(defaultTestServer).toContain("./go-p2p-server.mjs");
     expect(defaultTestServer).not.toContain("server/index.mjs");
-    expect(workspacePlaywright).toContain('testMatch: ["workspace-v1-acceptance.spec.ts", "agent-platform-acceptance.spec.ts"]');
-    expect(workspacePlaywright).toContain("go-workspace-server.mjs");
+    expect(workspacePlaywright.testMatch).toEqual(["workspace-v1-acceptance.spec.ts", "agent-platform-acceptance.spec.ts"]);
+    expect(workspacePlaywright.webServer[0].command).toBe("node e2e/support/go-workspace-server.mjs");
   });
 
   it("forwards workspace OAuth and trusted-proxy settings through the Go Compose gateway", async () => {
