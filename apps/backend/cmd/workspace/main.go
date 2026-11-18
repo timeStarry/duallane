@@ -48,6 +48,7 @@ import (
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/messageblocks"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/messagejobs"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/messages"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/mobileruntime"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/ntfy"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/overview"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/presence"
@@ -477,16 +478,19 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 		shutdownBotGateway = botGatewayWebSocket.Shutdown
 	}
 	var v1Handler *v1.HTTPHandler
+	var mobileNativePolicy func(context.Context) (mobileruntime.Policy, error)
 	if pool != nil {
 		v1Svc := v1.NewService(v1.NewPGRepository(pool, auth.DefaultSpaceID)).WithEmailSender(emailService).WithBlobStore(blobStore)
+		mobileNativePolicy = v1Svc.GetMobileNativePolicy
 		v1Handler = v1.NewHTTPHandler(v1Svc, authHandler).WithBotAuthenticator(botGatewayService).WithBotFilePipeline(fileService, botMessageService)
 	}
 	return &application{
 		pool: pool, cancel: cancel, backgroundDone: backgroundDone,
 		shutdownBotGateway: shutdownBotGateway, logger: logger,
 		handler: withPrivateWorkspaceMetrics(httpapi.NewRouter(httpapi.RouterOptions{
-			ObserveHTTP: workspaceHTTPObserver(metricSet),
-			Gate:        workspaceGate, Health: gate.HealthHandler(healthInput), Readiness: readinessHandler(healthInput, databaseProbe, storageProbe),
+			MobileNativePolicy: mobileNativePolicy,
+			ObserveHTTP:        workspaceHTTPObserver(metricSet),
+			Gate:               workspaceGate, Health: gate.HealthHandler(healthInput), Readiness: readinessHandler(healthInput, databaseProbe, storageProbe),
 			AuthRoutes: authHandler, ActorResolver: authHandler, Invites: inviteService,
 			MobileRelease: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")

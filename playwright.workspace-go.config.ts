@@ -2,10 +2,12 @@ import { defineConfig, devices } from "@playwright/test";
 
 const baseURL = "http://127.0.0.1:5198";
 const apiURL = "http://127.0.0.1:8898";
+const mobileEnabled = Boolean(process.env.DUALLANE_MOBILE_E2E_ROOT);
 
 export default defineConfig({
   testDir: "./e2e",
-  testMatch: ["workspace-v1-acceptance.spec.ts", "agent-platform-acceptance.spec.ts"],
+  testMatch: ["workspace-v1-acceptance.spec.ts", "agent-platform-acceptance.spec.ts",
+    ...(mobileEnabled ? ["mobile-compat-acceptance.spec.ts"] : [])],
   outputDir: ".private-test-results/workspace-go-browser",
   fullyParallel: false,
   workers: 1,
@@ -35,6 +37,13 @@ export default defineConfig({
       reuseExistingServer: false,
       gracefulShutdown: { signal: "SIGTERM", timeout: 10_000 },
       timeout: 120_000
-    }
+    },
+    ...(mobileEnabled ? [{
+      command: "node e2e/support/mobile-web-server.mjs",
+      url: "http://127.0.0.1:5196/assets/www/",
+      reuseExistingServer: false,
+      gracefulShutdown: { signal: "SIGTERM" as const, timeout: 10_000 },
+      timeout: 120_000,
+    }] : [])
   ]
 });

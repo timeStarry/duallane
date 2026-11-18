@@ -13,6 +13,17 @@ export type DualLaneRelease = {
 
 export const DUAL_LANE_RELEASES: DualLaneRelease[] = [
   {
+    version: "1.2.2",
+    releasedAt: "2026-11-18",
+    title: "手机端更新门槛与助手卡片展示",
+    summary: "补齐助手确认卡片的正文、按钮和操作反馈，并让手机安装包更新与界面热更各自保持清晰的版本要求。",
+    categories: [{ title: "卡片与手机更新", items: [
+      "助手确认与取消卡片可直接展示和操作，状态变化后重新读取，权限失效时停止操作",
+      "手机端可分别设置最低可用安装包版本与热更兼容下限，旧版本保留下载和安装入口",
+      "修复界面热更后掩盖安装包更新的问题，避免更新打断草稿和正在发送的内容"
+    ] }]
+  },
+  {
     version: "1.2.1",
     releasedAt: "2026-11-18",
     title: "智能助手确认卡片修复",

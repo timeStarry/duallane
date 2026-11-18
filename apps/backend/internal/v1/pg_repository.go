@@ -4435,7 +4435,7 @@ func (r *PGRepository) UpsertAdminMobileRelease(ctx context.Context, actorID str
 		return MobileClientRelease{}, err
 	}
 
-	reason := fmt.Sprintf("enabled=%t version=%s code=%d size=%d", stored.Enabled, stored.Version, stored.VersionCode, stored.ByteSize)
+	reason := fmt.Sprintf("enabled=%t version=%s code=%d size=%d minimum_native_code=%d", stored.Enabled, stored.Version, stored.VersionCode, stored.ByteSize, stored.MinimumSupportedNativeVersionCode)
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO audit_logs (id, space_id, actor_user_id, actor_github_login, action, target_type, target_id, result, reason, created_at)
 		VALUES ($1, $2, $3, NULLIF($4, ''), 'space.mobile_release_update', 'space', $2, 'success', $5, $6)
