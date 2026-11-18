@@ -108,6 +108,9 @@ test("sibling mobile acceptance is explicit, additive and keeps private output s
 
 test("quality gate runs both the Workspace privacy guard and the read-only gateway smoke guard", () => {
   const job = jobBlock("quality-gate");
+  const install = job.indexOf("- name: Install dependencies");
+  const tooling = job.indexOf("- name: Validate backend tooling guards");
+  assert.ok(install >= 0 && tooling > install, "resolved Playwright config guards require installed pinned dependencies");
   const step = job.split(/(?=^      - name: )/m)
     .find((part) => part.startsWith("      - name: Validate backend tooling guards"));
   assert.ok(step, "backend tooling guard step is missing");
