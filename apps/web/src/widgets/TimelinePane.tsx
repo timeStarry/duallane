@@ -88,6 +88,7 @@ import {
   Tooltip,
 } from "@/shared/ui";
 import { DualLaneCardKit } from "@/widgets/DualLaneCardKit";
+import { WorkspaceCardView } from "@/widgets/WorkspaceCardView";
 import {
   EmoteStickerPopover,
   extractFavoritableSource,
@@ -2132,10 +2133,15 @@ export function TimelinePane() {
                                 <div
                                   className={cn(
                                     "flex min-w-0 max-w-full items-end gap-1.5",
-                                    isOwn && "flex-row-reverse"
+                                    msg.cardReferences?.length ? "flex-col" : isOwn && "flex-row-reverse"
                                   )}
                                 >
-                                  {msg.card ? (
+                                  {Boolean(msg.cardReferences?.length) && (
+                                    <div className="min-w-0 max-w-full space-y-2">
+                                      {msg.cardReferences?.map((reference) => <WorkspaceCardView key={reference.cardId} reference={reference} />)}
+                                    </div>
+                                  )}
+                                  {msg.cardReferences?.length && !msg.blocks?.length && !msg.attachments?.length ? null : msg.card ? (
                                     <div className="min-w-0 max-w-full overflow-hidden">
                                       <DualLaneCardKit card={msg.card} onAction={triggerCardAction} />
                                     </div>

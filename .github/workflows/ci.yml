@@ -111,6 +111,9 @@ jobs:
       - name: Read application release version
         run: node -e "const fs = require('node:fs'); fs.appendFileSync(process.env.GITHUB_ENV, 'DUALLANE_APP_VERSION=' + require('./package.json').version + '\n')"
 
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
       - name: Validate backend tooling guards
         run: node --test .github/tests/ci-go-native-dependencies.test.mjs .github/tests/ci-go-p2p-privacy.test.mjs .github/tests/ci-go-workspace-privacy.test.mjs .github/tests/ci-unit-fixtures.test.mjs scripts/dev/go-dev.test.mjs scripts/backend/schema-coexistence.test.mjs scripts/backend/owned-process.test.mjs scripts/backend/go-workspace-browser.test.mjs scripts/backend/local-gateway-binding.test.mjs scripts/backend/gateway-readonly-smoke.test.mjs scripts/backend/storage-operator-retained.test.mjs scripts/backend/p2p-frozen-contract.test.mjs scripts/backend/frozen-legacy-contract.harness.test.mjs
 
@@ -138,9 +141,6 @@ jobs:
         # Root is limited to this disposable runner's synthetic filesystem tests.
         # The CLI has no production path or daemon override in its arguments.
         run: sudo env "PATH=$PATH" "$(command -v node)" --test scripts/backend/release-storage-permissions.test.mjs scripts/backend/release-permission-stage.test.mjs scripts/backend/release-adoption-entrypoint.test.mjs
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
 
       - name: Run tests
         # SQLite unit doubles create hundreds of tiny WAL commits. Keep their

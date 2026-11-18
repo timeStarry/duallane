@@ -167,7 +167,11 @@ async function joinMember(page: Page, baseURL: string, inviteCode: string, membe
   await page.goto(`${baseURL}/?invite=${encodeURIComponent(inviteCode)}`);
   await page.getByPlaceholder("可选：测试成员昵称（双窗口联调推荐使用）").fill(memberLabel);
   await page.getByRole("button", { name: "通过邀请码直接加入（开发环境快捷入口）" }).click();
-  await expect(page.getByRole("heading", { name: "共享空间" })).toBeVisible();
+  // The unauthenticated entry has the same heading. Wait for the server to
+  // recognize the issued human cookie before using this context's APIs.
+  await expect.poll(async () => (await page.request.get(new URL("/api/workspace/bootstrap", baseURL).href)).status(),
+    { timeout: 15_000, message: "invited member is authenticated by the actual Go service" }).toBe(200);
+  await expect(page.getByRole("main", { name: "DualLane 工作台", exact: true })).toBeVisible();
 }
 
 async function createGroup(page: Page, title: string, memberLabel: string): Promise<string> {
@@ -560,12 +564,17 @@ test("real SDK task HTTP roundtrip reads history, publishes mixed files, edits w
   }
 });
 
-test("real SDK interactive Feishu cards preserve actions, CAS and unknown outcomes", async ({ browser, baseURL }) => {
-  test.setTimeout(120_000);
+test("real SDK interactive Feishu cards render in Timeline, acknowledge actions and preserve CAS, unknown outcomes and membership", async ({ browser, baseURL }, testInfo: TestInfo) => {
+  test.setTimeout(180_000);
   const runId = randomUUID();
   const ownerContext = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const memberContext = await browser.newContext({ viewport: { width: 390, height: 844 } });
   ownerContext.setDefaultTimeout(10_000);
+  memberContext.setDefaultTimeout(10_000);
   const owner = await ownerContext.newPage();
+  const member = await memberContext.newPage();
+  const groupTitle = `SDK card group ${runId}`;
+  const memberLabel = `SDK card member ${runId}`;
   let client: DualLaneAgentClient | undefined;
   let scoped: AgentTaskClient | undefined;
   let droppedClient: DualLaneAgentClient | undefined;
@@ -582,7 +591,10 @@ test("real SDK interactive Feishu cards preserve actions, CAS and unknown outcom
     return asRecord(await response.json(), "synthetic human response");
   };
   try {
-    await signInOwner(owner, baseURL!);
+    const inviteCode = await signInOwner(owner, baseURL!);
+    await joinMember(member, baseURL!, inviteCode, memberLabel);
+    const memberBoot = await jsonRequest(member.request, "GET", "/api/workspace/bootstrap");
+    const memberId = requiredString(asRecord(asRecord(memberBoot.auth, "card member auth").currentUser, "card member identity").id, "card member id");
     const boot = await human("GET", "/api/v1/bootstrap");
     const ownerMember = asRecord(asRecord(boot.auth, "owner auth").currentUser, "owner identity");
     const ownerId = requiredString(ownerMember.id, "owner user id");
@@ -593,23 +605,22 @@ test("real SDK interactive Feishu cards preserve actions, CAS and unknown outcom
     if (!bot) throw new Error("synthetic card Bot is missing");
     const botUserId = requiredString(bot.botUserId, "Bot user id");
     await human("PATCH", `/api/workspace/bots/${encodeURIComponent(botId)}/settings`, {
-      accessPolicy: { ...accessPolicyPreset, groups: { ...accessPolicyPreset.groups, audience: "owner_only" } },
+      accessPolicy: accessPolicyPreset,
       allowDirect: true,
-      allowGroup: false,
+      allowGroup: true,
       maxContextMessages: 20,
       maxContextChars: 20_000,
       includeAttachmentMetadata: true,
       allowAttachmentPreview: true,
     });
-    const direct = await human("POST", "/api/workspace/conversations", { type: "direct", targetUserId: botUserId });
-    const conversationId = requiredString(asRecord(direct.conversation ?? direct, "Bot direct conversation").id, "Bot conversation id");
-    await human("PATCH", `/api/workspace/bots/${encodeURIComponent(botId)}/context-grants/${encodeURIComponent(conversationId)}`, {
-      allowTrigger: true,
-      allowContext: true,
-      maxMessages: 20,
+    const group = await human("POST", "/api/v1/conversations/groups", { title: groupTitle, memberIds: [memberId] });
+    const conversationId = requiredString(asRecord(group.conversation ?? group, "card group conversation").id, "card group id");
+    const joinedBot = await human("PATCH", `/api/workspace/bots/${encodeURIComponent(botId)}/group-policies/${encodeURIComponent(conversationId)}`, {
+      status: "active", allowTrigger: true, allowContext: true, maxMessages: 20,
     });
+    expect(asRecord(joinedBot.policy, "card Bot group admission").status).toBe("active");
     const issued = await human("POST", `/api/workspace/bots/${encodeURIComponent(botId)}/tokens`, {
-      scopes: ["messages:read_trigger", "messages:read_context", "messages:send", "cards:write"],
+      scopes: ["messages:read_trigger", "messages:read_context", "messages:send", "cards:write", "cards:act"],
     });
     tokenId = requiredString(asRecord(issued.tokenRecord, "issued token record").id, "issued token id");
     const credential = requiredString(issued.token, "issued Bot credential");
@@ -620,7 +631,7 @@ test("real SDK interactive Feishu cards preserve actions, CAS and unknown outcom
     const trigger = await human("POST", "/api/workspace/messages", {
       conversationId,
       clientMessageId: `card-trigger-${runId}`,
-      content: buildMessageContent([messageText(triggerText)]),
+      content: buildMessageContent([messageMention(botUserId, requiredString(bot.name, "card Bot name")), messageText(` ${triggerText}`)]),
     });
     const triggerId = requiredString(asRecord(trigger.message ?? trigger, "trigger message").id, "trigger message id");
     let delivered: AgentEvent | undefined;
@@ -633,7 +644,7 @@ test("real SDK interactive Feishu cards preserve actions, CAS and unknown outcom
     }, { timeout: 15_000, message: "real SDK receives the synthetic card trigger", intervals: [100, 250, 500] }).toBe(true);
     if (!delivered) throw new Error("card trigger delivery missing");
     const activation = await client.createTask({ eventId: delivered.eventId });
-    scoped = client.forTask(activation.task, { timeoutMs: 60_000 });
+    scoped = client.forTask(activation.task, { timeoutMs: 150_000 });
     const capabilities = await scoped.getCapabilities();
     expect(asRecord(capabilities.features, "card capabilities").taskCardUpdate).toBe(true);
 
@@ -678,6 +689,66 @@ test("real SDK interactive Feishu cards preserve actions, CAS and unknown outcom
     const sentMessage = asRecord(sent.message, "sent interactive card message");
     const sentMessageId = requiredString(sentMessage.id, "sent card message id");
 
+    const cardPath = `/api/workspace/cards/${encodeURIComponent(cardId)}`;
+    const actionPath = `${cardPath}/actions`;
+    const renderedCard = (page: Page) => page.getByRole("region", { name: "助手交互卡片", exact: true })
+      .and(page.locator(`[data-card-id="${cardId}"]`));
+    const openCardConversation = async (page: Page) => {
+      await page.reload();
+      await expect(page.getByRole("main", { name: "DualLane 工作台", exact: true })).toBeVisible();
+      const returnToList = page.getByRole("button", { name: "返回对话列表", exact: true });
+      if (await returnToList.isVisible()) await returnToList.click();
+      await page.getByRole("complementary", { name: "共享空间对话列表" })
+        .getByRole("button", { name: new RegExp(escapedRegExp(groupTitle)) }).click();
+      await expect(renderedCard(page)).toBeVisible();
+    };
+    const clickCardAction = async (page: Page, label: string, actionId: string, revision: number, actorId: string, savedData: JsonRecord): Promise<string> => {
+      const card = renderedCard(page);
+      const responsePromise = page.waitForResponse((response) => response.request().method() === "POST" &&
+        new URL(response.url()).pathname === actionPath);
+      await card.getByRole("button", { name: label, exact: true }).click();
+      const response = await responsePromise;
+      expect(response.status(), `actual Timeline ${actionId} action`).toBe(200);
+      const request = asRecord(response.request().postDataJSON(), "Timeline card action request");
+      const clientActionId = requiredString(request.clientActionId, "Timeline client action id");
+      expect(clientActionId).toMatch(/^act_[a-f0-9-]{36}$/u);
+      // Business data remains server-owned; the real renderer sends no data or
+      // arbitrary button payload as action input.
+      expect(request).toEqual({ actionId, clientActionId, expectedRevision: revision, input: {} });
+      const receipt = asRecord(asRecord(await response.json(), "Timeline action response").action, "Timeline action receipt");
+      expect(receipt).toMatchObject({ ok: true, replayed: false, revision, result: { accepted: true, actionId } });
+      await expect(card).toContainText("操作已提交，等待助手更新");
+      await expect(card.getByRole("button", { name: label, exact: true })).toBeDisabled();
+      // Exercise the server's same-operation replay without inventing another
+      // key. This is synthetic test traffic, never a replay of a real task.
+      const replayResponse = await page.request.post(actionPath, { data: request });
+      expect(replayResponse.status()).toBe(200);
+      expect(asRecord(asRecord(await replayResponse.json(), "replayed action response").action, "replayed action receipt"))
+        .toMatchObject({ ok: true, replayed: true, revision });
+      let callback: AgentEvent | undefined;
+      await expect.poll(async () => {
+        const updates = await client!.getUpdates({ afterSequence, limit: 50, timeoutMs: 10_000 });
+        callback = updates.events.find((event) => event.type === "card.action" && event.payload.cardId === cardId &&
+          event.payload.clientActionId === clientActionId);
+        for (const event of updates.events) afterSequence = Math.max(afterSequence, event.sequence);
+        return Boolean(callback);
+      }, { timeout: 15_000, intervals: [100, 250, 500], message: `real SDK receives ${actionId} callback from Timeline` }).toBe(true);
+      expect(callback?.payload).toMatchObject({ cardId, actionId, clientActionId, actorUserId: actorId, data: savedData });
+      const afterAction = await jsonRequest(page.request, "GET", cardPath);
+      expect(Number(asRecord(afterAction.card, "card after accepted action").revision)).toBe(revision);
+      return clientActionId;
+    };
+
+    // Render the actual SDK/Go-created message through AppV1's conversation
+    // loader, card-reference resolver and Timeline renderer (no fixture view).
+    await openCardConversation(owner);
+    await expect(renderedCard(owner)).toContainText(initialInput.title);
+    await expect(renderedCard(owner)).toContainText(initialInput.markdown);
+    await expect(renderedCard(owner).getByRole("button", { name: "确认", exact: true })).toBeEnabled();
+    await expect(renderedCard(owner).getByRole("button", { name: "取消", exact: true })).toBeEnabled();
+    await owner.screenshot({ path: testInfo.outputPath("sdk-card-timeline-desktop.png") });
+    const confirmActionId = await clickCardAction(owner, "确认", "confirm", 1, ownerId, initialInput.buttons[0].value);
+
     const updatedInput = {
       title: `合成交互卡片 ${runId}`,
       markdown: "状态：已确认",
@@ -700,6 +771,18 @@ test("real SDK interactive Feishu cards preserve actions, CAS and unknown outcom
       { actionId: "confirm", data: updatedInput.buttons[0].value },
       { actionId: "cancel", data: {} },
     ]);
+    // A real card.updated frame invalidates the projection already mounted in
+    // the owner's Timeline; revision 2 unlocks the acknowledged revision 1.
+    await expect(renderedCard(owner)).toContainText(updatedInput.markdown);
+    await expect(renderedCard(owner).getByRole("button", { name: "再次确认", exact: true })).toBeEnabled();
+    await openCardConversation(member);
+    await expect(renderedCard(member)).toContainText(updatedInput.markdown);
+    await expect(renderedCard(member).getByRole("button", { name: "再次确认", exact: true })).toBeEnabled();
+    await expect(renderedCard(member).getByRole("button", { name: "取消", exact: true })).toBeEnabled();
+    await assertNoHorizontalOverflow(member, "390px actual SDK card Timeline");
+    await member.screenshot({ path: testInfo.outputPath("sdk-card-timeline-390.png") });
+    const cancelActionId = await clickCardAction(member, "取消", "cancel", 2, memberId, {});
+    expect(cancelActionId).not.toBe(confirmActionId);
     const cardTools = createTaskToolServer(scoped);
     const toolUpdate = asRecord(await cardTools.callTool("duallane_update_card", {
       ...updatedInput, cardId, expectedRevision: 2, markdown: "状态：任务工具已确认",
@@ -711,6 +794,9 @@ test("real SDK interactive Feishu cards preserve actions, CAS and unknown outcom
       { actionId: "confirm", data: updatedInput.buttons[0].value },
       { actionId: "cancel", data: {} },
     ]);
+    await expect(renderedCard(owner)).toContainText("状态：任务工具已确认");
+    await expect(renderedCard(member)).toContainText("状态：任务工具已确认");
+    await expect(renderedCard(member).getByRole("button", { name: "取消", exact: true })).toBeEnabled();
 
     let revisionError: { code?: unknown; statusCode?: unknown; attemptOutcome?: unknown; safeToRetry?: unknown } | undefined;
     await assert.rejects(
@@ -864,10 +950,33 @@ test("real SDK interactive Feishu cards preserve actions, CAS and unknown outcom
     expect(committedMessages.filter((message) => message.id === committedMessageId)).toHaveLength(1);
     const committedCardRead = await jsonRequest(owner.request, "GET", `/api/workspace/cards/${encodeURIComponent(committedCardId)}`);
     expect(Number(asRecord(committedCardRead.card, "committed dropped card read").revision)).toBe(1);
+
+    // Revoke actual group membership. The Go authorization boundary must deny
+    // both projection and action; reload must remove the private message/card.
+    const removal = await owner.request.delete(`/api/v1/conversations/${encodeURIComponent(conversationId)}/members/${encodeURIComponent(memberId)}`);
+    expect(removal.status()).toBe(200);
+    const forbiddenProjection = await member.request.get(cardPath);
+    expect(forbiddenProjection.status()).toBe(404);
+    expect(await forbiddenProjection.json()).toMatchObject({ error: { code: "card.not_found" } });
+    const forbiddenAction = await member.request.post(actionPath, { data: {
+      actionId: "confirm", clientActionId: `act_${randomUUID()}`, expectedRevision: currentCardRevision, input: {},
+    } });
+    expect(forbiddenAction.status()).toBe(404);
+    expect(await forbiddenAction.json()).toMatchObject({ error: { code: "card.not_found" } });
+    await member.reload();
+    await expect(member.getByRole("main", { name: "DualLane 工作台", exact: true })).toBeVisible();
+    const returnToList = member.getByRole("button", { name: "返回对话列表", exact: true });
+    if (await returnToList.isVisible()) await returnToList.click();
+    await expect(member.getByRole("complementary", { name: "共享空间对话列表" })
+      .getByRole("button", { name: new RegExp(escapedRegExp(groupTitle)) })).toHaveCount(0);
+    await expect(renderedCard(member)).toHaveCount(0);
+    const afterMembershipLoss = await jsonRequest(owner.request, "GET", cardPath);
+    expect(Number(asRecord(afterMembershipLoss.card, "card after member removal").revision)).toBe(currentCardRevision);
   } finally {
     droppedScoped?.close(); droppedClient?.stop();
     scoped?.close(); client?.stop();
     if (botId && tokenId) await owner.request.post(new URL(`/api/workspace/bots/${encodeURIComponent(botId)}/tokens/${encodeURIComponent(tokenId)}/revoke`, baseURL!).href, { timeout: 10_000 }).catch(() => undefined);
+    await memberContext.close();
     await ownerContext.close();
   }
 });

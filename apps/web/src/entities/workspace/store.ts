@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { useLaneStore } from "@/entities/lane/store";
 import type { DualLaneCardKitDocument } from "@duallane/protocol";
+import { readWorkspaceCardReferences, type WorkspaceCardReference } from "@/shared/lib/workspace-cards";
 import {
   ApiClientError,
   apiV1,
@@ -119,6 +120,7 @@ export interface V1Message {
   reactions: Record<string, { count: number; reactedByMe: boolean }>;
   attachments?: V1MessageAttachment[];
   card?: DualLaneCardKitDocument;
+  cardReferences?: WorkspaceCardReference[];
 }
 
 export interface V1Conversation {
@@ -164,6 +166,7 @@ interface WorkspaceState {
   pinnedConversationIds: string[];
   userPreferences: Record<string, unknown>;
   messagesByConv: Record<string, V1Message[]>;
+  cardRevisions: Record<string, number>;
   members: Record<string, V1User>;
   activeConversationId: string | null;
   conversationEntry: { conversationId: string; revision: number; unreadCount: number; loading: boolean } | null;
@@ -646,6 +649,7 @@ function mapRawMessage(
     reactions: recalledAt ? {} : mapRawReactions(m.reactions),
     attachments: recalledAt ? undefined : mapRawAttachments(m.attachments, id),
     card: recalledAt ? undefined : (m.card as DualLaneCardKitDocument | undefined),
+    cardReferences: recalledAt ? undefined : readWorkspaceCardReferences(m.content),
   };
 }
 
@@ -1368,6 +1372,16 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
       ? eventObj.payload
       : {}) as Record<string, unknown>;
 
+    if (evType === "card.updated") {
+      const cardId = typeof payload.cardId === "string" ? payload.cardId : "";
+      const revision = payload.revision;
+      if (!cardId || !Number.isSafeInteger(revision) || Number(revision) < 1) return;
+      // The event is an invalidation summary, never an authorized card document.
+      set((state) => ({ cardRevisions: {
+        ...state.cardRevisions, [cardId]: Math.max(Number(revision), state.cardRevisions[cardId] || 0),
+      } }));
+      return;
+    }
     if (evType === "workspace.member_joined" || evType === "workspace.member_updated") {
       const m = (payload.member || payload) as Record<string, unknown>;
       const id = String(m.id || payload.userId || eventObj.targetId || "");
@@ -1764,6 +1778,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
                       reactions: {},
                       attachments: undefined,
                       card: undefined,
+                      cardReferences: undefined,
                       replyToId: undefined,
                       status: item.status === "read" ? "read" : resolvedMappedStatus,
                     }
@@ -2031,6 +2046,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
     pinnedConversationIds: [],
     userPreferences: {},
     messagesByConv: {},
+    cardRevisions: {},
     members: {},
     activeConversationId: null,
     conversationEntry: null,
@@ -2315,6 +2331,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
         pinnedConversationIds: [],
         userPreferences: {},
         messagesByConv: {},
+        cardRevisions: {},
         activeConversationId: null,
       });
     },
@@ -2902,6 +2919,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
                 reactions: {},
                 attachments: undefined,
                 card: undefined,
+                cardReferences: undefined,
                 replyToId: undefined,
               }
             : m

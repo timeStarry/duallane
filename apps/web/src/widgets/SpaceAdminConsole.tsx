@@ -51,6 +51,7 @@ import {
   Switch,
 } from "@/shared/ui";
 import { cn } from "@/shared/lib/cn";
+import { MobileNativeRequirements } from "./MobileNativeRequirements";
 
 const ADMIN_TABS: Array<{
   id: SpaceAdminTab;
@@ -208,6 +209,8 @@ export function SpaceAdminConsole() {
   const [mobEnabled, setMobEnabled] = useState(false);
   const [mobVersion, setMobVersion] = useState("");
   const [mobVersionCode, setMobVersionCode] = useState(0);
+  const [mobOtaFloor, setMobOtaFloor] = useState(0);
+  const [mobSupportedFloor, setMobSupportedFloor] = useState(0);
   const [mobTitle, setMobTitle] = useState("");
   const [mobNotes, setMobNotes] = useState("");
   const [busyMobAction, setBusyMobAction] = useState<"" | "upload" | "save">("");
@@ -328,6 +331,8 @@ export function SpaceAdminConsole() {
       setMobEnabled(Boolean(rel.enabled));
       setMobVersion(rel.version || "");
       setMobVersionCode(rel.versionCode || 0);
+      setMobOtaFloor(rel.ota?.minNativeVersionCode || 0);
+      setMobSupportedFloor(rel.minimumSupportedNativeVersionCode || 0);
       setMobTitle(rel.title || "");
       setMobNotes(rel.notes || "");
     }
@@ -656,6 +661,8 @@ export function SpaceAdminConsole() {
       setMobEnabled(Boolean(rel.enabled));
       setMobVersion(rel.version || "");
       setMobVersionCode(rel.versionCode || 0);
+      setMobOtaFloor(rel.ota?.minNativeVersionCode || 0);
+      setMobSupportedFloor(rel.minimumSupportedNativeVersionCode || 0);
       setMobTitle(rel.title || "");
       setMobNotes(rel.notes || "");
       setBannerSuccess(
@@ -684,11 +691,15 @@ export function SpaceAdminConsole() {
         versionCode: Number(mobVersionCode) || 0,
         title: mobTitle.trim(),
         notes: mobNotes.trim(),
+        minNativeVersionCode: mobOtaFloor,
+        minimumSupportedNativeVersionCode: mobSupportedFloor,
       });
       setMobileRel(res.release);
       setMobEnabled(Boolean(res.release.enabled));
       setMobVersion(res.release.version || "");
       setMobVersionCode(res.release.versionCode || 0);
+      setMobOtaFloor(res.release.ota?.minNativeVersionCode || 0);
+      setMobSupportedFloor(res.release.minimumSupportedNativeVersionCode || 0);
       setMobTitle(res.release.title || "");
       setBannerSuccess(mobEnabled ? "客户端同源分发信息已更新" : "已暂停服务端安装包分发");
     } catch (err) {
@@ -2003,7 +2014,7 @@ export function SpaceAdminConsole() {
                       <Input
                         type="number"
                         value={mobVersionCode ? String(mobVersionCode) : ""}
-                        disabled={Boolean(busyMobAction)}
+                        disabled={Boolean(busyMobAction) || Boolean(mobileRel?.sha256)}
                         onChange={(e) => setMobVersionCode(Number(e.target.value) || 0)}
                         placeholder="10007"
                       />
@@ -2018,6 +2029,8 @@ export function SpaceAdminConsole() {
                       />
                     </div>
                   </div>
+
+                  <MobileNativeRequirements otaFloor={mobOtaFloor} supportedFloor={mobSupportedFloor} apkCode={mobVersionCode} disabled={Boolean(busyMobAction)} otaAvailable={Boolean(mobileRel?.ota)} onOtaFloorChange={setMobOtaFloor} onSupportedFloorChange={setMobSupportedFloor} />
 
                   <div className="space-y-1">
                     <label className="text-xs text-dl-text-secondary">

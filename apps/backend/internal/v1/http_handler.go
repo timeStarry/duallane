@@ -113,6 +113,7 @@ func (h *HTTPHandler) Mount(r chi.Router) {
 		r.Post("/auth/email/send-code", h.handleSendLoginEmailCode)
 		r.Post("/auth/email/verify", h.handleVerifyLoginEmail)
 		r.Get("/mobile/releases/latest", h.handlePublicMobileReleaseLatest)
+		r.Get("/mobile/native-policy", h.handlePublicMobileNativePolicy)
 		r.Get("/mobile/android/latest.apk", h.handlePublicMobileDownloadAPK)
 		r.Head("/mobile/android/latest.apk", h.handlePublicMobileDownloadAPK)
 		r.Get("/mobile/android/latest-ota.zip", h.handlePublicMobileDownloadOTA)
@@ -1480,6 +1481,16 @@ func (h *HTTPHandler) handleVerifyLoginEmail(w http.ResponseWriter, r *http.Requ
 }
 
 const githubFallbackLatestAPKURL = "https://github.com/timeStarry/duallane-mobile/releases/latest/download/app-release.apk"
+
+func (h *HTTPHandler) handlePublicMobileNativePolicy(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	policy, err := h.service.GetMobileNativePolicy(r.Context())
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, policy)
+}
 
 func (h *HTTPHandler) handlePublicMobileReleaseLatest(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")

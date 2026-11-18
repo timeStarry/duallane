@@ -27,6 +27,7 @@ import (
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/invites"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/members"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/messages"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/mobileruntime"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/ntfy"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/overview"
 	sdkgate "github.com/timestarry/duallane/apps/backend/internal/workspace/sdkgate"
@@ -106,6 +107,7 @@ type EmailService interface {
 }
 
 type RouterOptions struct {
+	MobileNativePolicy  func(context.Context) (mobileruntime.Policy, error)
 	MobileRelease       http.Handler
 	ObserveHTTP         HTTPObserver
 	Gate                gate.Gate
@@ -149,6 +151,7 @@ func NewRouter(options RouterOptions) http.Handler {
 	if options.ObserveHTTP != nil {
 		router.Use(observeHTTP(options.ObserveHTTP))
 	}
+	router.Use(func(next http.Handler) http.Handler { return nativeRuntimeMiddleware(options, next) })
 	if options.MobileRelease != nil {
 		router.Get("/api/mobile/release-policy", options.MobileRelease.ServeHTTP)
 	}
@@ -219,6 +222,36 @@ func NewRouter(options RouterOptions) http.Handler {
 		})
 	}
 	return router
+}
+
+func nativeRuntimeMiddleware(options RouterOptions, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		declared := mobileruntime.Declared(r)
+		if options.MobileNativePolicy == nil || !mobileruntime.BusinessPath(r.URL.Path) || (!declared && !mobileruntime.UsesBearerTransport(r)) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		options.Gate.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			actor, ok := resolveActor(w, r, options.ActorResolver)
+			if !ok {
+				return
+			}
+			if !declared && actor.Kind != "human" {
+				next.ServeHTTP(w, r)
+				return
+			}
+			policy, err := options.MobileNativePolicy(r.Context())
+			if err != nil {
+				writeError(w, internalError())
+				return
+			}
+			if !mobileruntime.Supported(r, policy) {
+				mobileruntime.WriteUpgradeRequired(w, policy)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})).ServeHTTP(w, r)
+	})
 }
 
 type createInviteRequest struct {

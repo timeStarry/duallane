@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"path"
@@ -18,6 +19,7 @@ import (
 
 	platformstorage "github.com/timestarry/duallane/apps/backend/internal/platform/storage"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/email"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/mobileruntime"
 )
 
 const (
@@ -979,6 +981,7 @@ func inspectAPKBytes(apkBytes []byte) (version string, versionCode int, err erro
 	}
 	hasManifest := false
 	hasDex := false
+	configCount := 0
 	for _, f := range zr.File {
 		switch f.Name {
 		case "AndroidManifest.xml":
@@ -986,6 +989,10 @@ func inspectAPKBytes(apkBytes []byte) (version string, versionCode int, err erro
 		case "classes.dex":
 			hasDex = true
 		case "assets/app.config":
+			configCount++
+			if configCount > 1 {
+				return "", 0, fmt.Errorf("%w: APK 包含重复的原生版本信息", ErrInvalidInput)
+			}
 			if f.UncompressedSize64 > 0 && f.UncompressedSize64 <= 64*1024 {
 				rc, openErr := f.Open()
 				if openErr == nil {
@@ -994,7 +1001,7 @@ func inspectAPKBytes(apkBytes []byte) (version string, versionCode int, err erro
 					if readErr == nil {
 						var parsed embeddedAPKConfig
 						if json.Unmarshal(rawCfg, &parsed) == nil {
-							if pkg := strings.TrimSpace(parsed.Android.Package); pkg != "" && pkg != "com.timestarry.duallane" {
+							if pkg := strings.TrimSpace(parsed.Android.Package); pkg != "com.timestarry.duallane" {
 								return "", 0, fmt.Errorf("%w: APK 应用包名 (%s) 与 DualLane 不一致", ErrInvalidInput, pkg)
 							}
 							version = strings.TrimPrefix(strings.TrimSpace(parsed.Version), "v")
@@ -1007,6 +1014,9 @@ func inspectAPKBytes(apkBytes []byte) (version string, versionCode int, err erro
 	}
 	if !hasManifest || !hasDex {
 		return "", 0, fmt.Errorf("%w: 请上传包含完整签名结构的 Android APK 安装包", ErrInvalidInput)
+	}
+	if configCount != 1 || version == "" || versionCode <= 0 || versionCode > 2100000000 {
+		return "", 0, fmt.Errorf("%w: 无法可靠识别 APK 的原生版本信息", ErrInvalidInput)
 	}
 	return version, versionCode, nil
 }
@@ -1196,6 +1206,21 @@ func (s *Service) GetPublicMobileRelease(ctx context.Context) (MobileClientRelea
 	return s.repo.GetPublicMobileRelease(ctx)
 }
 
+func (s *Service) GetMobileNativePolicy(ctx context.Context) (mobileruntime.Policy, error) {
+	release, err := s.repo.GetPublicMobileRelease(ctx)
+	if errors.Is(err, ErrNotFound) {
+		return mobileruntime.Policy{}, nil
+	}
+	if err != nil {
+		return mobileruntime.Policy{}, err
+	}
+	return mobileruntime.Policy{
+		MinimumSupportedNativeVersionCode: release.MinimumSupportedNativeVersionCode,
+		LatestNativeVersionCode:           release.VersionCode,
+		APKURL:                            "/api/v1/mobile/android/latest.apk",
+	}, nil
+}
+
 func (s *Service) OpenPublicMobileAPK(ctx context.Context) (MobileClientRelease, io.ReadCloser, error) {
 	if s.blobStore == nil {
 		return MobileClientRelease{}, nil, ErrNotFound
@@ -1273,28 +1298,27 @@ func (s *Service) UploadAdminMobileAPK(ctx context.Context, actorID string, apkB
 	if err != nil {
 		return MobileClientRelease{}, err
 	}
-
-	rawVer := strings.TrimSpace(overrideVersion)
-	if rawVer == "" {
-		rawVer = detectedVersion
-	}
-	if rawVer == "" {
-		rawVer = existing.Version
-	}
-	if rawVer == "" {
-		return MobileClientRelease{}, fmt.Errorf("%w: 未能从 APK 自动识别版本号，请先填写版本号", ErrInvalidInput)
-	}
-	version, err := normalizeSemverString(rawVer)
+	detectedVersion, err = normalizeSemverString(detectedVersion)
 	if err != nil {
 		return MobileClientRelease{}, err
 	}
-
-	versionCode := overrideVersionCode
-	if versionCode <= 0 {
-		versionCode = detectedCode
+	if strings.TrimSpace(overrideVersion) != "" {
+		override, versionErr := normalizeSemverString(overrideVersion)
+		if versionErr != nil {
+			return MobileClientRelease{}, versionErr
+		}
+		if override != detectedVersion {
+			return MobileClientRelease{}, fmt.Errorf("%w: 声明版本与 APK 原生版本不一致", ErrInvalidInput)
+		}
 	}
-	if versionCode <= 0 {
-		versionCode = deriveDefaultVersionCode(version)
+	if overrideVersionCode > 0 && overrideVersionCode != detectedCode {
+		return MobileClientRelease{}, fmt.Errorf("%w: 声明版本号与 APK 原生版本号不一致", ErrInvalidInput)
+	}
+
+	version := detectedVersion
+	versionCode := detectedCode
+	if existing.MinimumSupportedNativeVersionCode > versionCode {
+		return MobileClientRelease{}, fmt.Errorf("%w: 安装包低于当前最低可用原生版本", ErrInvalidInput)
 	}
 
 	sum := sha256.Sum256(apkBytes)
@@ -1340,18 +1364,20 @@ func (s *Service) UploadAdminMobileAPK(ctx context.Context, actorID string, apkB
 	}
 
 	next := MobileClientRelease{
-		Enabled:     true,
-		Version:     version,
-		VersionCode: versionCode,
-		TagName:     "v" + version,
-		Title:       title,
-		Notes:       existing.Notes,
-		FileName:    fmt.Sprintf("duallane-v%s.apk", version),
-		ByteSize:    int64(len(apkBytes)),
-		SHA256:      shaHex,
-		DownloadURL: "/api/v1/mobile/android/latest.apk",
-		PublishedAt: nowStr,
-		OTA:         otaBundle,
+		Enabled:                           true,
+		Version:                           version,
+		VersionCode:                       versionCode,
+		APKVersion:                        version,
+		MinimumSupportedNativeVersionCode: existing.MinimumSupportedNativeVersionCode,
+		TagName:                           "v" + version,
+		Title:                             title,
+		Notes:                             existing.Notes,
+		FileName:                          fmt.Sprintf("duallane-v%s.apk", version),
+		ByteSize:                          int64(len(apkBytes)),
+		SHA256:                            shaHex,
+		DownloadURL:                       "/api/v1/mobile/android/latest.apk",
+		PublishedAt:                       nowStr,
+		OTA:                               otaBundle,
 	}
 	return s.repo.UpsertAdminMobileRelease(ctx, actorID, next, now)
 }
@@ -1421,19 +1447,25 @@ func (s *Service) UploadAdminMobileOTA(ctx context.Context, actorID string, rawZ
 	if apkFileName == "" {
 		apkFileName = fmt.Sprintf("duallane-v%s.apk", version)
 	}
+	apkVersion := existing.APKVersion
+	if apkVersion == "" {
+		apkVersion = existing.Version
+	}
 
 	next := MobileClientRelease{
-		Enabled:     true,
-		Version:     version,
-		VersionCode: apkVersionCode,
-		TagName:     "v" + version,
-		Title:       title,
-		Notes:       existing.Notes,
-		FileName:    apkFileName,
-		ByteSize:    existing.ByteSize,
-		SHA256:      existing.SHA256,
-		DownloadURL: "/api/v1/mobile/android/latest.apk",
-		PublishedAt: nowStr,
+		Enabled:                           true,
+		Version:                           version,
+		VersionCode:                       apkVersionCode,
+		APKVersion:                        apkVersion,
+		MinimumSupportedNativeVersionCode: existing.MinimumSupportedNativeVersionCode,
+		TagName:                           "v" + version,
+		Title:                             title,
+		Notes:                             existing.Notes,
+		FileName:                          apkFileName,
+		ByteSize:                          existing.ByteSize,
+		SHA256:                            existing.SHA256,
+		DownloadURL:                       "/api/v1/mobile/android/latest.apk",
+		PublishedAt:                       nowStr,
 		OTA: &MobileOTABundle{
 			Enabled:              true,
 			Version:              version,
@@ -1462,6 +1494,9 @@ func (s *Service) UpdateAdminMobileRelease(ctx context.Context, actorID string, 
 	if input.Enabled && !hasAPK && !hasOTA {
 		return MobileClientRelease{}, fmt.Errorf("%w: 请先上传签名 APK 或前端热更包后再开启分发", ErrInvalidInput)
 	}
+	if hasAPK && input.VersionCode > 0 && input.VersionCode != existing.VersionCode {
+		return MobileClientRelease{}, fmt.Errorf("%w: 原生版本号必须与已上传安装包一致，请上传新版 APK", ErrInvalidInput)
+	}
 
 	version := existing.Version
 	if strings.TrimSpace(input.Version) != "" {
@@ -1477,6 +1512,13 @@ func (s *Service) UpdateAdminMobileRelease(ctx context.Context, actorID string, 
 	}
 	if versionCode <= 0 && version != "" {
 		versionCode = deriveDefaultVersionCode(version)
+	}
+	minimumNative := existing.MinimumSupportedNativeVersionCode
+	if input.MinimumSupportedNativeVersionCode != nil {
+		minimumNative = *input.MinimumSupportedNativeVersionCode
+	}
+	if minimumNative < 0 || minimumNative > 2100000000 || (minimumNative > 0 && (!input.Enabled || !hasAPK || minimumNative > versionCode)) {
+		return MobileClientRelease{}, fmt.Errorf("%w: 最低可用原生版本必须可由当前启用的安装包满足", ErrInvalidInput)
 	}
 
 	title := strings.TrimSpace(input.Title)
@@ -1521,18 +1563,20 @@ func (s *Service) UpdateAdminMobileRelease(ctx context.Context, actorID string, 
 	}
 
 	next := MobileClientRelease{
-		Enabled:     input.Enabled,
-		Version:     version,
-		VersionCode: versionCode,
-		TagName:     tagName,
-		Title:       title,
-		Notes:       notes,
-		FileName:    fileName,
-		ByteSize:    existing.ByteSize,
-		SHA256:      existing.SHA256,
-		DownloadURL: "/api/v1/mobile/android/latest.apk",
-		PublishedAt: publishedAt,
-		OTA:         nextOTA,
+		Enabled:                           input.Enabled,
+		Version:                           version,
+		VersionCode:                       versionCode,
+		APKVersion:                        existing.APKVersion,
+		MinimumSupportedNativeVersionCode: minimumNative,
+		TagName:                           tagName,
+		Title:                             title,
+		Notes:                             notes,
+		FileName:                          fileName,
+		ByteSize:                          existing.ByteSize,
+		SHA256:                            existing.SHA256,
+		DownloadURL:                       "/api/v1/mobile/android/latest.apk",
+		PublishedAt:                       publishedAt,
+		OTA:                               nextOTA,
 	}
 	return s.repo.UpsertAdminMobileRelease(ctx, actorID, next, now)
 }

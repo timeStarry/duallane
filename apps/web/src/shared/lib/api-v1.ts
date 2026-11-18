@@ -522,14 +522,16 @@ export const apiV1 = {
         body: JSON.stringify({ state }),
       }
     ),
-  invokeCardAction: (cardId: string, actionId: string, input?: Record<string, unknown>, expectedRevision = 1) =>
+  resolveCard: (cardId: string) =>
+    requestJSON<{ card: unknown }>(`/api/workspace/cards/${encodeURIComponent(cardId)}`),
+  invokeCardAction: (cardId: string, actionId: string, input?: Record<string, unknown>, expectedRevision = 1, clientActionId = `act_${crypto.randomUUID()}`) =>
     requestJSON<Record<string, unknown>>(
       `/api/workspace/cards/${encodeURIComponent(cardId)}/actions`,
       {
         method: "POST",
         body: JSON.stringify({
           actionId,
-          clientActionId: `act_${crypto.randomUUID()}`,
+          clientActionId,
           expectedRevision,
           input: input || {},
         }),
@@ -1513,6 +1515,8 @@ export interface MobileClientReleaseDTO {
   enabled: boolean;
   version: string;
   versionCode: number;
+  apkVersion?: string;
+  minimumSupportedNativeVersionCode?: number;
   tagName: string;
   title: string;
   notes: string;
@@ -1531,6 +1535,8 @@ export interface MobileClientReleaseMetadataInput {
   versionCode: number;
   title: string;
   notes: string;
+  minNativeVersionCode?: number;
+  minimumSupportedNativeVersionCode?: number;
 }
 
 export type ConversationNotificationLevel = "all" | "mentions" | "muted";
