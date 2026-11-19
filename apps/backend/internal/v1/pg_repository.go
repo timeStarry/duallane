@@ -3972,11 +3972,48 @@ func (r *PGRepository) FindBoundEmailOwner(ctx context.Context, normalizedEmail 
 	return userID, nil
 }
 
+// Prefer explicit bindings. An ambiguous address at the best priority cannot
+// select an account. Use the same policy when creating and redeeming a code.
+const emailLoginOwnerSQL = `
+	SELECT id FROM (
+		SELECT u.id, count(*) OVER (PARTITION BY (bound.address IS NOT NULL)) AS matches
+		FROM space_members sm
+		JOIN users u ON u.id = sm.user_id
+		LEFT JOIN user_preferences up ON up.user_id = u.id
+		CROSS JOIN LATERAL (SELECT NULLIF(lower(btrim(up.prefs_json::jsonb ->> 'boundEmail')), '') AS address) bound
+		WHERE sm.space_id = $1 AND sm.removed_at IS NULL AND u.kind = 'human'
+		  AND (bound.address = $2 OR (bound.address IS NULL AND u.github_id IS NOT NULL AND u.github_login_email = $2))
+		ORDER BY (bound.address IS NOT NULL) DESC
+		LIMIT 1
+	) candidate WHERE matches = 1
+`
+
+type emailChallengeQueryer interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
+func findEmailLoginOwner(ctx context.Context, queryer emailChallengeQueryer, spaceID, normalizedEmail string) (string, error) {
+	var userID string
+	err := queryer.QueryRow(ctx, emailLoginOwnerSQL, spaceID, normalizedEmail).Scan(&userID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	return userID, err
+}
+
+func (r *PGRepository) FindEmailLoginOwner(ctx context.Context, normalizedEmail string) (string, error) {
+	return findEmailLoginOwner(ctx, r.pool, r.spaceID, normalizedEmail)
+}
+
 func (r *PGRepository) CheckEmailChallengeCooldown(ctx context.Context, userID string, now time.Time) error {
+	return checkEmailChallengeCooldown(ctx, r.pool, userID, now)
+}
+
+func checkEmailChallengeCooldown(ctx context.Context, queryer emailChallengeQueryer, userID string, now time.Time) error {
 	nowUTC := now.UTC()
 	var count int
 	var latest *time.Time
-	err := r.pool.QueryRow(ctx, `
+	err := queryer.QueryRow(ctx, `
 		SELECT COUNT(*), MAX(created_at)
 		FROM notification_email_challenges
 		WHERE user_id = $1 AND created_at >= $2
@@ -4005,6 +4042,20 @@ func (r *PGRepository) SaveEmailChallenge(ctx context.Context, challengeID, user
 		prefix = "echl_bind_%"
 	} else if strings.HasPrefix(challengeID, "echl_login_") {
 		prefix = "echl_login_%"
+		// Serialize reservations before sending so concurrent requests share the cooldown.
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, "duallane:login-email:"+userID); err != nil {
+			return err
+		}
+		selected, err := findEmailLoginOwner(ctx, tx, r.spaceID, normalizedEmail)
+		if err != nil {
+			return err
+		}
+		if selected != userID {
+			return ErrChallengeInvalid
+		}
+		if err := checkEmailChallengeCooldown(ctx, tx, userID, now); err != nil {
+			return err
+		}
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE notification_email_challenges
@@ -4247,15 +4298,11 @@ func (r *PGRepository) ResolveEmailLoginMember(ctx context.Context, userID, norm
 			coalesce(u.nickname, ''),
 			coalesce(u.avatar_url, ''),
 			sm.role
-		FROM space_members sm
-		JOIN users u ON u.id = sm.user_id
-		JOIN user_preferences up ON up.user_id = u.id
-		WHERE sm.space_id = $1
-		  AND sm.user_id = $2
-		  AND sm.removed_at IS NULL
-		  AND u.kind = 'human'
-		  AND lower(coalesce((up.prefs_json::jsonb ->> 'boundEmail'), '')) = $3
-	`, r.spaceID, userID, normalized).Scan(&uID, &uGitHub, &uDisplay, &uNick, &uAvatar, &role)
+		FROM (`+emailLoginOwnerSQL+`) selected
+		JOIN users u ON u.id = selected.id
+		JOIN space_members sm ON sm.space_id = $1 AND sm.user_id = u.id
+		WHERE selected.id = $3
+	`, r.spaceID, normalized, userID).Scan(&uID, &uGitHub, &uDisplay, &uNick, &uAvatar, &role)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return V1BootstrapMember{}, ErrChallengeInvalid
 	}

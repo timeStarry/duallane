@@ -30,8 +30,9 @@ This document complements:
   privileged decisions.
 - Backend authorization is authoritative; client capability flags are only UI
   hints.
-- Public Workspace entry supports GitHub login only. Invite creation and invite
-  management require an authenticated member with permission.
+- Public Workspace entry supports GitHub login and existing-member email codes.
+  Invite creation and management require an authenticated member with
+  permission.
 - Normal member responses must not include operation records, transfer ledger
   rows, request IDs, IP addresses, user agents, OAuth provider payloads, storage
   keys, filesystem paths, or event sequence internals as visible product data.
@@ -172,7 +173,7 @@ Entry-state responses:
 | State | Meaning | Required client behavior |
 | --- | --- | --- |
 | `disabled` | Feature flag is off | Show disabled shared-space state. |
-| `needs_login` | No valid session | Show GitHub login only. |
+| `needs_login` | No valid session | Offer GitHub login and email verification. |
 | `not_invited` | OAuth identity is known but not accepted | Show safe access copy. |
 | `ready` | Active member | Render Workspace shell. |
 
@@ -200,11 +201,19 @@ Rules:
 - `start` may accept an invite code through a safe query or OAuth state value.
 - In production, `callback` must reject missing or mismatched OAuth state before
   exchanging the GitHub authorization code.
-- The public login page still shows only `使用 GitHub 登录`.
 - OAuth callback binds the seeded owner when GitHub login/email matches
   `timeStarry` / `timestarry@qq.com`.
 - OAuth callback accepts an invited account only after invite validation.
 - Rejected login writes an operation record.
+
+Existing-member email login uses `POST /api/v1/auth/email/send-code` with
+`email` and `POST /api/v1/auth/email/verify` with `email`, `challengeId`, and
+`code`. The send response contains a challenge ID, masked address, expiry,
+and retry interval for any valid email. The server sends a code only for an
+eligible account. Verification resolves the current login address again and
+requires the same active member. Web receives its session cookie. Requests
+with `client: "mobile"` receive the existing native session token response.
+See [email login and identity rules](WORKSPACE_AUTH_INVITE_DESIGN.md#existing-member-email-login).
 
 Create invite:
 
@@ -937,7 +946,7 @@ P2:
 
 ## 14. Acceptance Checklist
 
-- Public login can be implemented with GitHub login only.
+- Public login supports GitHub OAuth and email verification for existing members.
 - Bootstrap gives enough data to render the shell without exposing internals.
 - Conversation, member, file, and group APIs return product-shaped objects, not
   raw database rows.

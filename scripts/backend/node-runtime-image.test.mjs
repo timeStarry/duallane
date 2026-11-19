@@ -25,11 +25,12 @@ test("Node online code and image are retired while canonical SQL and browser too
   }
   assert.ok(web.dependencies.vite && web.dependencies.react && web.dependencies.unified);
   const sql = await readdir(path.join(root, "apps/web/server/migrations"));
-  assert.equal(sql.filter(name => name.endsWith(".sql")).length, 37);
+  assert.equal(sql.filter(name => name.endsWith(".sql")).length, 38);
   assert.ok(sql.includes("034_workspace_chat_auto_hide.sql"));
   assert.ok(sql.includes("035_mobile_sessions.sql"));
   assert.ok(sql.includes("036_v1_clean_architecture.sql"));
   assert.ok(sql.includes("037_agent_task_authorization.sql"));
+  assert.ok(sql.includes("038_github_login_email.sql"));
   const canonicalMobileMigration = await readFile(path.join(root, "apps/web/server/migrations/035_mobile_sessions.sql"));
   const reviewedMobileFixture = await readFile(path.join(root, "apps/backend/internal/platform/migrations/testdata/035_mobile_sessions.sql"));
   assert.deepEqual(canonicalMobileMigration, reviewedMobileFixture, "activated mobile migration must preserve the reviewed bridge fixture bytes");
@@ -39,6 +40,9 @@ test("Node online code and image are retired while canonical SQL and browser too
   const canonicalAgentMigration = await readFile(path.join(root, "apps/web/server/migrations/037_agent_task_authorization.sql"));
   const reviewedAgentFixture = await readFile(path.join(root, "apps/backend/internal/platform/migrations/testdata/037_agent_task_authorization.sql"));
   assert.deepEqual(canonicalAgentMigration, reviewedAgentFixture, "activated Agent migration must preserve the reviewed bridge fixture bytes");
+  const canonicalGitHubEmailMigration = await readFile(path.join(root, "apps/web/server/migrations/038_github_login_email.sql"));
+  const reviewedGitHubEmailFixture = await readFile(path.join(root, "apps/backend/internal/platform/migrations/testdata/038_github_login_email.sql"));
+  assert.deepEqual(canonicalGitHubEmailMigration, reviewedGitHubEmailFixture, "activated GitHub email migration must preserve the reviewed bridge fixture bytes");
   await access(path.join(root, "packages/agent-sdk/package.json"));
 });
 
