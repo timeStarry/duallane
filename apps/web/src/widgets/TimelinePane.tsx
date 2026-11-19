@@ -701,35 +701,55 @@ export function TimelinePane() {
   }, [activeConversationId, activeEntry?.history, canReadTimeline, chatVisible, currentUser?.id, highlightedMessageId, liveIncomingIds, messages, unreadBoundaryId]);
 
   useEffect(() => {
-    if (!canReadTimeline || !isNearBottom || highlightedMessageId || connectionStatus !== "connected" ||
+    if (!canReadTimeline || highlightedMessageId || connectionStatus !== "connected" ||
       !activeConv?.unreadCount || activeEntry?.history !== "ready") return;
+    const timeline = scrollRef.current;
     const visibleWindow = messages.filter(isReadAnchor);
     const tail = visibleWindow.at(-1);
-    if (!tail) return;
+    if (!timeline || !tail) return;
     // A late commit may have been placed earlier by its display timestamp.
     const anchor = visibleWindow.reduce((latest, message) =>
       (message.creationSeq ?? -1) > (latest.creationSeq ?? -1) ? message : latest, tail);
     if (anchor.id === activeConv.lastReadMessageId) return;
-    const timer = window.setTimeout(() => {
-      const timeline = scrollRef.current;
-      const row = timeline?.querySelector(`[data-message-id="${CSS.escape(tail.id)}"]`);
-      if (!isForegroundDocument() || !navigator.onLine || !timeline?.clientHeight ||
-        timeline.closest('[inert], [aria-hidden="true"]') || !atTimelineBottom(timeline) || !row) return;
-      const viewport = timeline.getBoundingClientRect();
-      const bounds = row.getBoundingClientRect();
-      if (bounds.top < viewport.bottom && bounds.bottom > viewport.top) {
-        void markVisibleConversationRead(activeConv.id, anchor.id);
-      }
-    }, 180);
-    return () => window.clearTimeout(timer);
-  }, [activeConv, activeEntry?.history, canReadTimeline, connectionStatus, highlightedMessageId, isNearBottom,
+
+    let timer: number | undefined;
+    const scheduleRead = () => {
+      if (timer !== undefined || !atTimelineBottom(timeline)) return;
+      timer = window.setTimeout(() => {
+        timer = undefined;
+        if (!isForegroundDocument() || !navigator.onLine || !timeline.clientHeight ||
+          timeline.closest('[inert], [aria-hidden="true"]') || !atTimelineBottom(timeline)) return;
+        const row = timeline.querySelector(`[data-message-id="${CSS.escape(tail.id)}"]`);
+        if (!row) return;
+        const viewport = timeline.getBoundingClientRect();
+        const bounds = row.getBoundingClientRect();
+        if (bounds.top < viewport.bottom && bounds.bottom > viewport.top) {
+          void markVisibleConversationRead(activeConv.id, anchor.id);
+        }
+      }, 180);
+    };
+
+    // The composer and message content can resize without a scroll event.
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(scheduleRead);
+    observer?.observe(timeline);
+    if (timelineContentRef.current) observer?.observe(timelineContentRef.current);
+    timeline.addEventListener("scroll", scheduleRead, { passive: true });
+    window.addEventListener("online", scheduleRead);
+    scheduleRead();
+    return () => {
+      window.clearTimeout(timer);
+      observer?.disconnect();
+      timeline.removeEventListener("scroll", scheduleRead);
+      window.removeEventListener("online", scheduleRead);
+    };
+  }, [activeConv, activeEntry?.history, canReadTimeline, connectionStatus, highlightedMessageId,
     markVisibleConversationRead, messages]);
 
-  // Observe inner content height shifts (images, stickers, code blocks, cards) to stay locked at bottom
+  // Follow the tail when content or the viewport resizes (e.g. a typing bar appears).
   const hasWorkspaceMessages = messages.length > 0;
   useEffect(() => {
     if (
-      activeLane !== "workspace" ||
+      !chatVisible ||
       typeof ResizeObserver === "undefined" ||
       !timelineContentRef.current ||
       !scrollRef.current
@@ -742,10 +762,14 @@ export function TimelinePane() {
       if (isNearBottomRef.current && !useWorkspaceStore.getState().highlightedMessageId) {
         scrollEl.scrollTop = scrollEl.scrollHeight;
       }
+      const near = atTimelineBottom(scrollEl);
+      isNearBottomRef.current = near;
+      setIsNearBottom(near);
     });
     observer.observe(contentEl);
+    observer.observe(scrollEl);
     return () => observer.disconnect();
-  }, [activeLane, activeConversationId, hasWorkspaceMessages]);
+  }, [activeConversationId, chatVisible, hasWorkspaceMessages]);
 
   // Clean bottom lock for P2P Direct lane
   useIsomorphicLayoutEffect(() => {
