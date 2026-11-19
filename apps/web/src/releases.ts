@@ -13,6 +13,22 @@ export type DualLaneRelease = {
 
 export const DUAL_LANE_RELEASES: DualLaneRelease[] = [
   {
+    version: "1.2.3",
+    releasedAt: "2026-11-19",
+    title: "恢复未读导航与表情收藏",
+    summary: "修正网页和手机的未读计数，恢复新消息分隔与旧贴纸收藏的发送。",
+    categories: [
+      { title: "消息阅读", items: [
+        "返回网页会话后可从顶部提示跳到「以下为新消息」，向上补拉历史不会增加底部新消息计数",
+        "手机会话列表预取历史时保留未读数，打开会话并显示最新消息后再确认已读"
+      ] },
+      { title: "表情与贴纸", items: [
+        "收藏页只显示个人收藏，合集专属贴纸可以在所属合集中找到",
+        "恢复发送旧版本收藏的内置贴纸"
+      ] }
+    ]
+  },
+  {
     version: "1.2.2",
     releasedAt: "2026-11-18",
     title: "手机端更新门槛与助手卡片展示",
