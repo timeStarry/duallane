@@ -103,6 +103,26 @@ func TestPGConversationProjectionCarriesViewerReadState(t *testing.T) {
 	markedEvent := replayConversationProjection(t, ctx, service, conversationID)
 	assertConversationReadState(t, markedEvent, int64(1), "msg-event-system", readAtString, int64(6))
 	assertConversationReadParity(t, marked, markedEvent)
+	if marked["firstUnreadMessageId"] != "msg-event-owner" || markedEvent["firstUnreadMessageId"] != "msg-event-owner" {
+		t.Fatalf("first unread anchor did not survive event projection: %#v %#v", marked["firstUnreadMessageId"], markedEvent["firstUnreadMessageId"])
+	}
+	readEvent := EventRecord{Type: "conversation.read", SpaceID: DefaultSpaceID, ConversationID: &conversationID}
+	for _, viewer := range []*auth.Actor{actor, {ID: "usr_owner", Kind: "human", Role: "owner"}} {
+		payload, err := repository.ProjectEventPayload(ctx, viewer, readEvent, map[string]any{
+			"conversationId": conversationID, "userId": actor.ID, "readAt": readAtString,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		readProjection := projectEvent(readEvent, payload, viewer).Payload
+		if viewer.ID == actor.ID {
+			if readProjection["unreadCount"] != int64(1) || readProjection["firstUnreadMessageId"] != "msg-event-owner" || readProjection["lastReadMessageId"] != "msg-event-system" {
+				t.Fatalf("actor read receipt missing its anchors: %#v", readProjection)
+			}
+		} else if _, exists := readProjection["unreadCount"]; exists || len(readProjection) != 3 {
+			t.Fatalf("peer receipt exposed personal unread state: %#v", readProjection)
+		}
+	}
 
 	mustExecEventPG(t, ctx, conn, `
 		UPDATE conversation_members

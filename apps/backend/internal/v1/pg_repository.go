@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/botaccess"
+	workspaceConversations "github.com/timestarry/duallane/apps/backend/internal/workspace/conversations"
 )
 
 type PGRepository struct {
@@ -392,11 +393,13 @@ func (r *PGRepository) GetBootstrap(ctx context.Context, actorID string, now tim
 		convRows, err := r.pool.Query(ctx, `
 			WITH user_convs AS (
 				SELECT
-					c.id,
+					c.id AS conversation_id,
 					c.type,
 					c.title,
 					c.avatar_emoji,
 					c.created_at,
+					cm.user_id,
+					cm.last_read_message_id,
 					cm.last_read_seq,
 					cm.last_read_at,
 					coalesce(cm.notification_level, 'all') AS notification_level
@@ -429,11 +432,11 @@ func (r *PGRepository) GetBootstrap(ctx context.Context, actorID string, now tim
 					)
 			)
 			SELECT
-				uc.id,
-				uc.type,
-				uc.title,
-				uc.avatar_emoji,
-				uc.notification_level,
+				cm.conversation_id,
+				cm.type,
+				cm.title,
+				cm.avatar_emoji,
+				cm.notification_level,
 				CASE
 					WHEN latest.id IS NULL THEN ''
 					WHEN latest.recalled_at IS NOT NULL THEN '消息已撤回'
@@ -448,60 +451,29 @@ func (r *PGRepository) GetBootstrap(ctx context.Context, actorID string, now tim
 					ELSE coalesce(latest.author_name, '')
 				END AS last_sender_name,
 				latest.created_at AS last_msg_at,
-				coalesce(all_latest.created_at, uc.created_at) AS last_activity_at,
-				CASE
-					WHEN uc.last_read_seq IS NOT NULL THEN coalesce(su.cnt, 0)
-					ELSE coalesce(tu.cnt, 0)
-				END AS unread_count,
+				coalesce(all_latest.created_at, cm.created_at) AS last_activity_at,
+				unread.count, unread.first_message_id, cm.last_read_message_id, cm.last_read_at, cm.last_read_seq,
 				GREATEST(
 					(SELECT MAX(cm_peer.last_read_at)
 					 FROM conversation_members cm_peer
-					 WHERE cm_peer.conversation_id = uc.id
+					 WHERE cm_peer.conversation_id = cm.conversation_id
 					   AND cm_peer.user_id <> $2
 					   AND cm_peer.removed_at IS NULL),
 					(SELECT MAX(m_peer.created_at)
 					 FROM messages m_peer
-					 WHERE m_peer.conversation_id = uc.id
+					 WHERE m_peer.conversation_id = cm.conversation_id
 					   AND m_peer.space_id = $1
 					   AND m_peer.deleted_at IS NULL
 					   AND m_peer.kind <> 'system'
 					   AND m_peer.author_id IS NOT NULL
 					   AND m_peer.author_id <> $2)
 				) AS peer_last_read_at
-			FROM user_convs uc
-			LEFT JOIN LATERAL (
-				SELECT COUNT(DISTINCT m.id)::int AS cnt
-				FROM workspace_events we
-				JOIN messages m ON m.id = we.target_id
-				WHERE uc.last_read_seq IS NOT NULL
-					AND we.space_id = $1
-					AND we.conversation_id = uc.id
-					AND we.seq > uc.last_read_seq
-					AND we.type = 'message.created'
-					AND m.space_id = $1
-					AND m.deleted_at IS NULL
-					AND m.topic_id IS NULL
-					AND (m.thread_root_id IS NULL OR m.also_send_to_channel = TRUE)
-					AND m.kind <> 'system'
-					AND (m.author_id IS NULL OR m.author_id <> $2)
-			) su ON uc.last_read_seq IS NOT NULL
-			LEFT JOIN LATERAL (
-				SELECT COUNT(m.id)::int AS cnt
-				FROM messages m
-				WHERE uc.last_read_seq IS NULL
-					AND m.conversation_id = uc.id
-					AND m.space_id = $1
-					AND m.deleted_at IS NULL
-					AND m.topic_id IS NULL
-					AND (m.thread_root_id IS NULL OR m.also_send_to_channel = TRUE)
-					AND m.kind <> 'system'
-					AND (m.author_id IS NULL OR m.author_id <> $2)
-					AND (uc.last_read_at IS NULL OR m.created_at > uc.last_read_at)
-			) tu ON uc.last_read_seq IS NULL
+			FROM user_convs cm
+			CROSS JOIN LATERAL (`+workspaceConversations.TimelineUnreadSQL+`) unread
 			LEFT JOIN LATERAL (
 				SELECT m.created_at
 				FROM messages m
-				WHERE m.conversation_id = uc.id
+				WHERE m.conversation_id = cm.conversation_id
 					AND m.space_id = $1
 					AND m.topic_id IS NULL
 					AND (m.thread_root_id IS NULL OR m.also_send_to_channel = TRUE)
@@ -520,7 +492,7 @@ func (r *PGRepository) GetBootstrap(ctx context.Context, actorID string, now tim
 					coalesce(NULLIF(u_author.nickname, ''), NULLIF(u_author.display_name, ''), NULLIF(u_author.github_login, ''), '') AS author_name
 				FROM messages m
 				LEFT JOIN users u_author ON u_author.id = m.author_id
-				WHERE m.conversation_id = uc.id
+				WHERE m.conversation_id = cm.conversation_id
 					AND m.space_id = $1
 					AND m.topic_id IS NULL
 					AND (m.thread_root_id IS NULL OR m.also_send_to_channel = TRUE)
@@ -532,7 +504,7 @@ func (r *PGRepository) GetBootstrap(ctx context.Context, actorID string, now tim
 				ORDER BY m.created_at DESC, m.id DESC
 				LIMIT 1
 			) latest ON TRUE
-			ORDER BY last_activity_at DESC, uc.id ASC
+			ORDER BY last_activity_at DESC, cm.conversation_id ASC
 		`, r.spaceID, actorID)
 		if err != nil {
 			return V1BootstrapResponse{}, err
@@ -545,6 +517,7 @@ func (r *PGRepository) GetBootstrap(ctx context.Context, actorID string, now tim
 				c              V1BootstrapConversation
 				rawSenderName  string
 				lastMsgAt      *time.Time
+				lastReadAt     *time.Time
 				activity       time.Time
 				peerLastReadAt *time.Time
 			)
@@ -560,6 +533,10 @@ func (r *PGRepository) GetBootstrap(ctx context.Context, actorID string, now tim
 				&lastMsgAt,
 				&activity,
 				&c.UnreadCount,
+				&c.FirstUnreadMessageID,
+				&c.LastReadMessageID,
+				&lastReadAt,
+				&c.LastReadSeq,
 				&peerLastReadAt,
 			); scanErr != nil {
 				convRows.Close()
@@ -592,6 +569,10 @@ func (r *PGRepository) GetBootstrap(ctx context.Context, actorID string, now tim
 			if lastMsgAt != nil && !lastMsgAt.IsZero() {
 				formatted := lastMsgAt.UTC().Format(time.RFC3339Nano)
 				c.LastMessageAt = &formatted
+			}
+			if lastReadAt != nil && !lastReadAt.IsZero() {
+				formatted := lastReadAt.UTC().Format(time.RFC3339Nano)
+				c.LastReadAt = &formatted
 			}
 			if peerLastReadAt != nil && !peerLastReadAt.IsZero() {
 				formatted := peerLastReadAt.UTC().Format(time.RFC3339Nano)
@@ -2129,102 +2110,69 @@ func (r *PGRepository) RemoveGroupMember(ctx context.Context, actorID, conversat
 	return summary, nil
 }
 
-func (r *PGRepository) MarkConversationRead(ctx context.Context, actorID, conversationID string, now time.Time) (string, error) {
+func (r *PGRepository) MarkConversationRead(ctx context.Context, actorID, conversationID, requestedMessageID string, now time.Time) (ConversationReadResult, error) {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
-		return "", err
+		return ConversationReadResult{}, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	var isMember bool
-	if err := tx.QueryRow(ctx, `
-		SELECT EXISTS (
-			SELECT 1 FROM conversation_members cm
-			JOIN conversations c ON c.id = cm.conversation_id AND c.space_id = $1
-			WHERE cm.conversation_id = $2 AND cm.user_id = $3 AND cm.removed_at IS NULL
-		)
-	`, r.spaceID, conversationID, actorID).Scan(&isMember); err != nil {
-		return "", err
+	var conversationType string
+	err = tx.QueryRow(ctx, `
+		SELECT c.type FROM conversation_members cm
+		JOIN conversations c ON c.id = cm.conversation_id AND c.space_id = $1
+		WHERE cm.conversation_id = $2 AND cm.user_id = $3 AND cm.removed_at IS NULL
+		FOR UPDATE OF cm
+	`, r.spaceID, conversationID, actorID).Scan(&conversationType)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ConversationReadResult{}, ErrForbidden
 	}
-	if !isMember {
-		return "", ErrForbidden
-	}
-
-	var messageID *string
-	var messageAt *time.Time
-	var sequence int64
-	if err := tx.QueryRow(ctx, `
-		SELECT
-			latest.id,
-			latest.created_at,
-			COALESCE(latest.event_seq, (SELECT COALESCE(MAX(seq), 0) FROM workspace_events WHERE space_id = $1))
-		FROM (VALUES (1)) anchor(one)
-		LEFT JOIN LATERAL (
-			SELECT m.id, m.created_at, we.seq AS event_seq
-			FROM messages m
-			LEFT JOIN workspace_events we
-				ON we.space_id = m.space_id
-				AND we.conversation_id = m.conversation_id
-				AND we.type = 'message.created'
-				AND we.target_id = m.id
-			WHERE m.space_id = $1 AND m.conversation_id = $2 AND m.topic_id IS NULL AND m.deleted_at IS NULL
-			ORDER BY m.created_at DESC, we.seq DESC NULLS LAST, m.id DESC
-			LIMIT 1
-		) latest ON TRUE
-	`, r.spaceID, conversationID).Scan(&messageID, &messageAt, &sequence); err != nil {
-		return "", err
-	}
-
-	readAt := now.UTC()
-	if messageAt != nil && messageAt.UTC().After(readAt) {
-		readAt = messageAt.UTC()
-	}
-
-	var msgIDArg any
-	if messageID != nil && strings.TrimSpace(*messageID) != "" {
-		msgIDArg = strings.TrimSpace(*messageID)
-	}
-	var compareTime time.Time
-	if messageAt != nil {
-		compareTime = messageAt.UTC()
-	} else {
-		compareTime = readAt
-	}
-
-	tag, err := tx.Exec(ctx, `
-		UPDATE conversation_members
-		SET last_read_message_id = COALESCE($1, last_read_message_id),
-		    last_read_at = GREATEST(COALESCE(last_read_at, $2), $2),
-		    last_read_seq = GREATEST(COALESCE(last_read_seq, $3), $3)
-		WHERE conversation_id = $4
-		  AND user_id = $5
-		  AND removed_at IS NULL
-		  AND (
-			last_read_seq IS NULL
-			OR last_read_seq < $3
-			OR last_read_at IS NULL
-			OR last_read_at < $6
-		  )
-	`, msgIDArg, readAt, sequence, conversationID, actorID, compareTime)
 	if err != nil {
-		return "", err
+		return ConversationReadResult{}, err
+	}
+	allowed, err := workspaceConversations.PassesBotConversationPolicy(ctx, tx, r.spaceID, actorID, conversationID, conversationType)
+	if err != nil {
+		return ConversationReadResult{}, err
+	}
+	if !allowed {
+		return ConversationReadResult{}, ErrForbidden
 	}
 
-	readAtStr := readAt.Format(time.RFC3339Nano)
-	if tag.RowsAffected() > 0 {
+	marker, err := workspaceConversations.AdvanceTimelineReadMarker(ctx, tx, r.spaceID, conversationID, actorID, requestedMessageID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ConversationReadResult{}, ErrNotFound
+	}
+	if err != nil {
+		return ConversationReadResult{}, err
+	}
+	if marker != nil {
 		if err := emitWorkspaceEventTx(ctx, tx, r.spaceID, actorID, conversationID, "conversation.read", "conversation", conversationID, map[string]any{
 			"conversationId": conversationID,
 			"userId":         actorID,
-			"readAt":         readAtStr,
-		}, readAt); err != nil {
-			return "", err
+			"readAt":         marker.ReadAt.UTC().Format(time.RFC3339Nano),
+		}, now.UTC()); err != nil {
+			return ConversationReadResult{}, err
 		}
 	}
 
-	if err := tx.Commit(ctx); err != nil {
-		return "", err
+	var result ConversationReadResult
+	var readAt *time.Time
+	if err := tx.QueryRow(ctx, `
+		SELECT cm.last_read_message_id, cm.last_read_at, cm.last_read_seq, unread.count, unread.first_message_id
+		FROM conversation_members cm
+		CROSS JOIN LATERAL (`+workspaceConversations.TimelineUnreadSQL+`) unread
+		WHERE cm.conversation_id = $2 AND cm.user_id = $3 AND cm.removed_at IS NULL
+	`, r.spaceID, conversationID, actorID).Scan(&result.LastReadMessageID, &readAt, &result.LastReadSeq, &result.UnreadCount, &result.FirstUnreadMessageID); err != nil {
+		return ConversationReadResult{}, err
 	}
-	return readAtStr, nil
+	result.ReadAt = now.UTC().Format(time.RFC3339Nano)
+	if readAt != nil {
+		result.ReadAt = readAt.UTC().Format(time.RFC3339Nano)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return ConversationReadResult{}, err
+	}
+	return result, nil
 }
 
 func (r *PGRepository) SendConversationTyping(ctx context.Context, actorID, conversationID, kind, state string, now time.Time) (string, error) {

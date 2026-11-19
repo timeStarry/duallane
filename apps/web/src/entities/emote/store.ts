@@ -273,8 +273,16 @@ export interface EmoteStoreState {
 
 let toastTimer: ReturnType<typeof setTimeout> | null = null;
 
+export function selectFavoriteEmotes(entries: EmoteLibraryDTO["entries"]): CustomEmoteDTO[] {
+  return entries.flatMap((entry) => (entry.type === "emote" && entry.emote ? [entry.emote] : []));
+}
+
 export function resolveCustomEmoteSrc(emote: Pick<CustomEmoteDTO, "id" | "src">): string {
   return emote.src || `/api/workspace/emotes/${encodeURIComponent(emote.id)}/content`;
+}
+
+function previewFavoriteEntry(emote: CustomEmoteDTO): EmoteLibraryDTO["entries"][number] {
+  return { type: "emote", id: emote.id, emote };
 }
 
 export const useEmoteStore = create<EmoteStoreState>((set, get) => ({
@@ -311,6 +319,7 @@ export const useEmoteStore = create<EmoteStoreState>((set, get) => ({
       loading: false,
       library: {
         ...EMPTY_LIBRARY,
+        entries: PREVIEW_CUSTOM_EMOTES.map(previewFavoriteEntry),
         emotes: PREVIEW_CUSTOM_EMOTES,
         collections: PREVIEW_COLLECTIONS,
         usage: {
@@ -423,10 +432,8 @@ export const useEmoteStore = create<EmoteStoreState>((set, get) => ({
         uploaded.push(item);
       }
       set((s) => {
-        const nextEmotes =
-          options?.collectionId && options?.addToLibrary === false
-            ? s.library.emotes
-            : [...uploaded, ...s.library.emotes];
+        const addToFavorites = !options?.collectionId || options.addToLibrary !== false;
+        const nextEmotes = addToFavorites ? [...uploaded, ...s.library.emotes] : s.library.emotes;
         const nextCollections = options?.collectionId
           ? s.library.collections.map((c) =>
               c.id === options.collectionId
@@ -437,6 +444,9 @@ export const useEmoteStore = create<EmoteStoreState>((set, get) => ({
         return {
           library: {
             ...s.library,
+            entries: addToFavorites
+              ? [...uploaded.map(previewFavoriteEntry), ...s.library.entries]
+              : s.library.entries,
             emotes: nextEmotes,
             collections: nextCollections,
           },
@@ -608,6 +618,11 @@ export const useEmoteStore = create<EmoteStoreState>((set, get) => ({
       set((s) => ({
         library: {
           ...s.library,
+          entries: s.library.entries.map((entry) =>
+            entry.type === "emote" && entry.emote?.id === emoteId
+              ? { ...entry, emote: { ...entry.emote, label: trimmed } }
+              : entry
+          ),
           emotes: s.library.emotes.map((e) => (e.id === emoteId ? { ...e, label: trimmed } : e)),
         },
       }));
@@ -622,6 +637,9 @@ export const useEmoteStore = create<EmoteStoreState>((set, get) => ({
       set((s) => ({
         library: {
           ...s.library,
+          entries: s.library.entries.filter(
+            (entry) => entry.type !== "emote" || entry.emote?.id !== emoteId
+          ),
           emotes: s.library.emotes.filter((e) => e.id !== emoteId),
         },
       }));
@@ -659,6 +677,7 @@ export const useEmoteStore = create<EmoteStoreState>((set, get) => ({
         library: {
           ...EMPTY_LIBRARY,
           ...res.library,
+          entries: Array.isArray(res.library.entries) ? res.library.entries : [],
           emotes: Array.isArray(res.library.emotes) ? res.library.emotes : [],
           collections: Array.isArray(res.library.collections) ? res.library.collections : [],
         },

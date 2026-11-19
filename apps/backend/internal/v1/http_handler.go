@@ -356,12 +356,28 @@ func (h *HTTPHandler) handleRemoveGroupMember(w http.ResponseWriter, r *http.Req
 
 func (h *HTTPHandler) handleMarkConversationRead(w http.ResponseWriter, r *http.Request) {
 	convID := chi.URLParam(r, "conversationId")
-	readAt, err := h.service.MarkConversationRead(r.Context(), actorFromContext(r.Context()).ID, convID)
+	var body struct {
+		MessageID *string `json:"messageId"`
+	}
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
+	if err := decoder.Decode(&body); err != nil && !errors.Is(err, io.EOF) {
+		writeJSONError(w, http.StatusBadRequest, "v1.invalid_json", "请求体格式错误")
+		return
+	}
+	if err := decoder.Decode(new(json.RawMessage)); !errors.Is(err, io.EOF) {
+		writeJSONError(w, http.StatusBadRequest, "v1.invalid_json", "请求体格式错误")
+		return
+	}
+	result, err := h.service.MarkConversationRead(r.Context(), actorFromContext(r.Context()).ID, convID, body.MessageID)
 	if err != nil {
 		writeServiceError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "conversationId": convID, "readAt": readAt})
+	writeJSON(w, http.StatusOK, struct {
+		OK             bool   `json:"ok"`
+		ConversationID string `json:"conversationId"`
+		ConversationReadResult
+	}{OK: true, ConversationID: convID, ConversationReadResult: result})
 }
 
 func (h *HTTPHandler) handleConversationTyping(w http.ResponseWriter, r *http.Request) {

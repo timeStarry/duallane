@@ -161,6 +161,21 @@ func TestPGConversationReadMarkerMatchesNodeSemantics(t *testing.T) {
 	if err := insertReadMarkerMessage(ctx, pool, group.ID, "usr_read_owner", "read-owner-message", "owner message", now.Add(2*time.Minute)); err != nil {
 		t.Fatal(err)
 	}
+	for _, messageID := range []string{"hidden-after-read", "recalled-after-read", "thread-after-read"} {
+		if err := insertReadMarkerMessage(ctx, pool, group.ID, "usr_read_owner", messageID, "not an unread main-timeline row", now.Add(3*time.Minute)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO message_hidden_states (user_id, message_id, hidden_at)
+		VALUES ('usr_read_member', 'hidden-after-read', $1)`, now.Add(4*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE messages SET recalled_at = $1 WHERE id = 'recalled-after-read'`, now.Add(4*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE messages SET thread_root_id = 'read-owner-message', also_send_to_channel = FALSE WHERE id = 'thread-after-read'`); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := pool.Exec(ctx, `
 		INSERT INTO attachments (
 			id, space_id, uploader_id, conversation_id, visibility, status,
@@ -185,7 +200,10 @@ func TestPGConversationReadMarkerMatchesNodeSemantics(t *testing.T) {
 		t.Fatalf("get after messages: %v", err)
 	}
 	if withNewMessages.UnreadCount != 1 {
-		t.Fatalf("unread after own and owner messages = %d, want one owner message", withNewMessages.UnreadCount)
+		t.Fatalf("unread = %d, want only the visible owner message", withNewMessages.UnreadCount)
+	}
+	if withNewMessages.FirstUnreadMessageID == nil || *withNewMessages.FirstUnreadMessageID != "read-owner-message" {
+		t.Fatalf("first unread anchor = %v, want read-owner-message", withNewMessages.FirstUnreadMessageID)
 	}
 	if message := findConversationMessageForReadTest(withNewMessages, "read-owner-message"); message == nil || len(message.Attachments) != 1 || message.Attachments[0].ID != "read-owner-attachment" || message.Attachments[0].MIMEType != "image/png" {
 		t.Fatalf("get conversation attachment projection = %#v, want one image attachment", message)
@@ -233,6 +251,28 @@ func TestPGConversationReadMarkerMatchesNodeSemantics(t *testing.T) {
 	}
 	if got := requireConversationForReadTest(t, listedAgain, group.ID).UnreadCount; got != 0 {
 		t.Fatalf("listed unread after second mark = %d, want zero", got)
+	}
+
+	// A send can take its timestamp before a concurrent send acquires the
+	// conversation lock. Its later creation event must still count as new.
+	const lateMessageID = "read-still-new-despite-earlier-timestamp"
+	if err := insertReadMarkerMessage(ctx, pool, group.ID, "usr_read_owner", lateMessageID, "late commit", now.Add(30*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	input := ConversationInput{ActorID: "usr_read_member", ConversationID: group.ID}
+	beforeLateRead, err := service.GetConversation(ctx, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if beforeLateRead.UnreadCount != 1 || beforeLateRead.FirstUnreadMessageID == nil || *beforeLateRead.FirstUnreadMessageID != lateMessageID {
+		t.Fatalf("late message projection = unread %d, first %v", beforeLateRead.UnreadCount, beforeLateRead.FirstUnreadMessageID)
+	}
+	lateRead, err := service.MarkRead(ctx, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lateRead.UnreadCount != 0 || lateRead.LastReadMessageID == nil || *lateRead.LastReadMessageID != lateMessageID {
+		t.Fatalf("late message receipt = unread %d, anchor %v", lateRead.UnreadCount, lateRead.LastReadMessageID)
 	}
 }
 

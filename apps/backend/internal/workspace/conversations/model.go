@@ -55,6 +55,7 @@ type Conversation struct {
 	LastMessagePlainText string                   `json:"lastMessagePlainText"`
 	LastMessageAt        *string                  `json:"lastMessageAt"`
 	UnreadCount          int64                    `json:"unreadCount"`
+	FirstUnreadMessageID *string                  `json:"firstUnreadMessageId"`
 	LastReadMessageID    *string                  `json:"lastReadMessageId"`
 	LastReadAt           *string                  `json:"lastReadAt"`
 	LastReadSeq          *int64                   `json:"lastReadSeq"`
@@ -81,21 +82,22 @@ type Message struct {
 // ConversationRecord is a storage projection. It deliberately does not have
 // JSON tags because it must never be returned directly from an HTTP handler.
 type ConversationRecord struct {
-	ID                string
-	SpaceID           string
-	Type              string
-	Title             string
-	AvatarEmoji       *string
-	RetentionCount    int64
-	CreatedBy         string
-	CreatedAt         time.Time
-	LastActivityAt    time.Time
-	MessageCount      int64
-	UnreadCount       int64
-	LastReadMessageID *string
-	LastReadAt        *time.Time
-	LastReadSeq       *int64
-	NotificationLevel string
+	ID                   string
+	SpaceID              string
+	Type                 string
+	Title                string
+	AvatarEmoji          *string
+	RetentionCount       int64
+	CreatedBy            string
+	CreatedAt            time.Time
+	LastActivityAt       time.Time
+	MessageCount         int64
+	UnreadCount          int64
+	FirstUnreadMessageID *string
+	LastReadMessageID    *string
+	LastReadAt           *time.Time
+	LastReadSeq          *int64
+	NotificationLevel    string
 }
 
 type MemberRecord = workspaceMembers.MemberRecord

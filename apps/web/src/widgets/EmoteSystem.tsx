@@ -26,7 +26,6 @@ import {
   Upload,
 } from "lucide-react";
 import {
-  emotePacks,
   findFirstImageEmoteKey,
   getEmoteInsertText,
   getReactionEmote,
@@ -51,6 +50,7 @@ import { useRecentEmojisStore } from "@/shared/lib/recent-emojis-v1";
 import {
   resolveCustomEmoteSrc,
   resolveOrderedPickerTabKeys,
+  selectFavoriteEmotes,
   useEmoteStore,
   type StudioTab,
 } from "@/entities/emote/store";
@@ -719,6 +719,7 @@ export function EmoteStickerPopover({
     moveTabOrder,
     reorderTabBefore,
   } = useEmoteStore();
+  const favoriteEmotes = useMemo(() => selectFavoriteEmotes(library.entries), [library.entries]);
 
   useEffect(() => {
     if (open && lane === "workspace" && !hydrated) {
@@ -850,20 +851,19 @@ export function EmoteStickerPopover({
   };
 
   const handleSelectCustom = (emote: CustomEmoteDTO) => {
-    if (lane === "workspace" && conversationId) {
-      if (emote.sourceType === "builtin" && emote.emoteKey) {
-        const [packId, itemId] = emote.emoteKey.split(":");
-        const foundPack = emotePacks.find((p) => p.id === packId);
-        const foundItem = foundPack?.items.find((it) => it.id === itemId);
-        if (foundItem) {
-          void sendWorkspaceMessage(conversationId, getEmoteInsertText(foundItem), replyToId);
-          setOpen(false);
-          return;
-        }
+    if (lane !== "workspace" || !conversationId) return;
+    if (emote.kind === "builtin" || emote.sourceType === "builtin") {
+      const item = emote.emoteKey ? getReactionEmote(emote.emoteKey)?.item : undefined;
+      if (item?.kind !== "image") {
+        showToast("这枚贴纸当前不可用");
+        return;
       }
+      // Built-in catalog keys contain a colon and use the text message path.
+      void sendWorkspaceMessage(conversationId, item.token, replyToId);
+    } else {
       void sendCustomSticker(conversationId, emote.id, replyToId);
-      setOpen(false);
     }
+    setOpen(false);
   };
 
   const handleSharePackToChat = async (collectionId: string) => {
@@ -1210,7 +1210,7 @@ export function EmoteStickerPopover({
             <div className="space-y-2">
               <div className="flex items-center justify-between px-0.5">
                 <span className="text-[11px] font-semibold text-dl-text-secondary">
-                  收藏贴纸 ({library.emotes.length})
+                  收藏贴纸 ({favoriteEmotes.length})
                 </span>
                 <Button
                   type="button"
@@ -1235,7 +1235,7 @@ export function EmoteStickerPopover({
                   <span>上传贴纸</span>
                 </Button>
 
-                {library.emotes.map((emote) => (
+                {favoriteEmotes.map((emote) => (
                   <Button
                     key={emote.id}
                     type="button"
@@ -1254,7 +1254,7 @@ export function EmoteStickerPopover({
                   </Button>
                 ))}
               </div>
-              {library.emotes.length === 0 && (
+              {favoriteEmotes.length === 0 && (
                 <div className="pt-4 text-center text-xs text-dl-text-tertiary">
                   支持直接上传 PNG / JPG / GIF / WebP 动图，或在聊天消息上点心形一键收藏。
                 </div>
@@ -1471,6 +1471,7 @@ export function EmoteStudioPanel() {
     showToast,
     closeStudio,
   } = useEmoteStore();
+  const favoriteEmotes = useMemo(() => selectFavoriteEmotes(library.entries), [library.entries]);
 
   const [newPackName, setNewPackName] = useState("");
   const [stagedPackFiles, setStagedPackFiles] = useState<File[]>([]);
@@ -1571,7 +1572,7 @@ export function EmoteStudioPanel() {
           options={[
             { value: "packs", label: `表情包 (${library.collections.length})` },
             { value: "create", label: "新建表情包" },
-            { value: "favorites", label: `收藏贴纸 (${library.emotes.length})` },
+            { value: "favorites", label: `收藏贴纸 (${favoriteEmotes.length})` },
             { value: "builtin", label: "内置与偏好" },
           ]}
         />
@@ -1665,13 +1666,13 @@ export function EmoteStudioPanel() {
             )}
           </div>
 
-          {library.emotes.length > 0 && (
+          {favoriteEmotes.length > 0 && (
             <div className="space-y-2">
               <div className="text-xs font-semibold text-dl-text-primary">
                 3. 或从已有收藏贴纸中勾选加入（已勾选 {selectedExistingIds.length} 张）
               </div>
               <div className="dl-scroll grid max-h-40 grid-cols-6 max-narrow:grid-cols-4 gap-1.5 overflow-y-auto rounded-xl border border-dl-border-hairline p-2">
-                {library.emotes.map((emote) => {
+                {favoriteEmotes.map((emote) => {
                   const checked = selectedExistingIds.includes(emote.id);
                   return (
                     <Button
@@ -2031,7 +2032,7 @@ export function EmoteStudioPanel() {
           </div>
 
           <div className="grid grid-cols-5 max-narrow:grid-cols-3 gap-2">
-            {library.emotes.map((emote) => {
+            {favoriteEmotes.map((emote) => {
               const selected = selectedFavIds.includes(emote.id);
               return (
                 <div
