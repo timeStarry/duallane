@@ -379,6 +379,59 @@ func TestPGAvatarCleanupHoldsObjectLockThroughPhysicalDelete(t *testing.T) {
 	}
 }
 
+func TestPGAvatarVisibleToCurrentGroupPeers(t *testing.T) {
+	fixture := newPGAvatarIntegrationFixture(t)
+	const owner = "usr_avatar_owner"
+	const member = "usr_avatar_member"
+	const viewer = "usr_avatar_viewer"
+	const group = "conv_avatar_group"
+
+	if _, err := fixture.service.SetOwnAvatar(fixture.ctx, SetOwnAvatarInput{
+		ActorID: member, MIMEType: "image/png", Content: []byte("source-member"),
+	}); err != nil {
+		t.Fatalf("set member avatar: %v", err)
+	}
+	profile, err := fixture.repo.GetCurrentAvatar(fixture.ctx, DefaultSpaceID, member)
+	if err != nil || profile == nil {
+		t.Fatalf("current avatar = %#v, err=%v", profile, err)
+	}
+	input := GetProfileAvatarInput{ActorID: viewer, UserID: member, Version: profile.Version}
+	assertDenied := func(t *testing.T) {
+		t.Helper()
+		if _, err := fixture.service.GetProfileAvatar(fixture.ctx, input); !isAvatarCode(err, CodeAvatarNotFound) {
+			t.Fatalf("unexpected result of reading hidden avatar: %v", err)
+		}
+	}
+	if _, err := fixture.service.GetProfileAvatar(fixture.ctx, GetProfileAvatarInput{
+		ActorID: owner, UserID: member, Version: profile.Version,
+	}); err != nil {
+		t.Fatalf("owner failed to read the avatar: %v", err)
+	}
+	t.Run("unrelated space member", assertDenied)
+
+	mustExecPGAvatar(t, fixture.ctx, fixture.conn, `
+		INSERT INTO conversations (id, space_id, type, title, created_by, created_at)
+		VALUES ($1, $2, 'group', 'Avatar group', $3, $4)
+	`, group, DefaultSpaceID, owner, fixture.now)
+	mustExecPGAvatar(t, fixture.ctx, fixture.conn, `
+		INSERT INTO conversation_members (conversation_id, user_id, joined_at)
+		VALUES ($1, $2, $4), ($1, $3, $4)
+	`, group, member, viewer, fixture.now)
+	if _, err := fixture.service.GetProfileAvatar(fixture.ctx, input); err != nil {
+		t.Fatalf("active group peer failed to read the avatar: %v", err)
+	}
+
+	mustExecPGAvatar(t, fixture.ctx, fixture.conn, `UPDATE space_members SET role = 'auditor' WHERE space_id = $1 AND user_id = $2`, DefaultSpaceID, viewer)
+	t.Run("viewer no longer has a conversation role", assertDenied)
+	mustExecPGAvatar(t, fixture.ctx, fixture.conn, `UPDATE space_members SET role = 'member' WHERE space_id = $1 AND user_id = $2`, DefaultSpaceID, viewer)
+
+	for _, userID := range []string{viewer, member} {
+		mustExecPGAvatar(t, fixture.ctx, fixture.conn, `UPDATE conversation_members SET removed_at = $3 WHERE conversation_id = $1 AND user_id = $2`, group, userID, fixture.now)
+		t.Run("removed group participant "+userID, assertDenied)
+		mustExecPGAvatar(t, fixture.ctx, fixture.conn, `UPDATE conversation_members SET removed_at = NULL WHERE conversation_id = $1 AND user_id = $2`, group, userID)
+	}
+}
+
 func TestPGAvatarLifecycleUsesIsolatedSchemaAndAtomicStorageCleanup(t *testing.T) {
 	fixture := newPGAvatarIntegrationFixture(t)
 	owner := "usr_avatar_owner"

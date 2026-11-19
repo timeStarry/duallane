@@ -355,6 +355,9 @@ but the UI should be designed around the stable concepts.
   granted by an owner.
 - Group membership is visible inside that group context but does not expand the
   global member directory.
+- Members with conversation access can load the current profile avatar of a
+  peer in an active shared group through the authenticated avatar endpoint.
+  This group-based access requires both memberships to remain active.
 - Direct-chat creation, group creation, and group-member addition all use the
   same server-side visibility check. Supplying a guessed user ID does not bypass
   discovery policy.

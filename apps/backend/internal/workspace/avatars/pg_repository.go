@@ -352,7 +352,10 @@ func findVisibleAvatar(ctx context.Context, queryer avatarQueryer, spaceID, view
 					ON viewer_cm.conversation_id = c.id AND viewer_cm.user_id = $2 AND viewer_cm.removed_at IS NULL
 				INNER JOIN conversation_members visible_cm
 					ON visible_cm.conversation_id = c.id AND visible_cm.user_id = u.id AND visible_cm.removed_at IS NULL
-				WHERE c.space_id = $1 AND c.type = 'direct'
+				INNER JOIN space_members viewer_sm
+					ON viewer_sm.space_id = c.space_id AND viewer_sm.user_id = $2 AND viewer_sm.removed_at IS NULL
+				WHERE c.space_id = $1
+				  AND (c.type = 'direct' OR (c.type = 'group' AND viewer_sm.role IN ('owner', 'admin', 'member')))
 			)
 			OR EXISTS (
 				SELECT 1 FROM member_visibility_grants grant_row
