@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile, execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import test from "node:test";
@@ -135,9 +135,12 @@ async function fixture(t) {
   };
 }
 
-test("pilot builds both reviewed commit trees and a pinned OTA without updating either remote", async (t) => {
+test("pilot builds both reviewed trees and a pinned OTA from an aliased work directory", async (t) => {
   const f = await fixture(t);
-  const adapter = f.build();
+  const alias = join(f.root, "work-alias");
+  await mkdir(f.config.workDirectory);
+  await symlink(f.config.workDirectory, alias, process.platform === "win32" ? "junction" : "dir");
+  const adapter = f.build({ workDirectory: alias });
   const evaluation = await adapter.evaluate(TICKET);
   assert.equal(evaluation.decision, "accept");
   assert.deepEqual(evaluation.repositories, ["main", "mobile"]);

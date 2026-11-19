@@ -1,5 +1,5 @@
 import { constants } from "node:fs";
-import { access, lstat, mkdir, mkdtemp, readFile, unlink } from "node:fs/promises";
+import { access, lstat, mkdir, mkdtemp, readFile, realpath, unlink } from "node:fs/promises";
 import { delimiter, isAbsolute, join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { safeText } from "./channel.mjs";
@@ -211,7 +211,9 @@ export function createDevelopment({ config, env = process.env, localRemotes = {}
 
   async function scratch(id, stage) {
     await mkdir(config.workDirectory, { recursive: true, mode: 0o700 });
-    return await mkdtemp(join(config.workDirectory, `${id.toLowerCase()}-${stage}-`));
+    // Resolve operator-owned aliases (including Windows short names) before
+    // comparing canonical paths inside the candidate checkout.
+    return await mkdtemp(join(await realpath(config.workDirectory), `${id.toLowerCase()}-${stage}-`));
   }
 
   async function invoke(stage, cwd, home, ticketId, fields, signal) {
