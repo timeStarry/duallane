@@ -284,6 +284,17 @@ test.describe("DualLane v1.0 Shared Workspace Login, Search, File Transfer & 320
 
       await expect(pageMember.getByRole("heading", { name: "共享空间" })).toBeVisible();
 
+      const privateProfile = await pageOwner.request.patch("/api/workspace/me/profile", { data: { searchDiscoverable: false } });
+      expect(privateProfile.ok()).toBe(true);
+      const avatarUpload = await pageOwner.request.put("/api/workspace/me/avatar", {
+        headers: { "Content-Type": "image/png" },
+        data: buildWorkspacePngBuffer(),
+      });
+      expect(avatarUpload.status()).toBe(200);
+      const { user: { avatarUrl } } = await avatarUpload.json() as { user: { avatarUrl: string } };
+      expect(avatarUrl).toMatch(/^\/api\/workspace\/avatars\//);
+      expect((await pageMember.request.get(avatarUrl)).status()).toBe(404);
+
       // 4. Owner creates a group conversation including Member B
       await pageOwner.getByRole("button", { name: "新建群组" }).click();
       const createGroupDialog = pageOwner.getByRole("dialog", { name: "新建群聊", exact: true });
@@ -340,6 +351,9 @@ test.describe("DualLane v1.0 Shared Workspace Login, Search, File Transfer & 320
       const timeline = pageMember.getByTestId("workspace-timeline-scroll");
       const boundary = timeline.getByRole("separator", { name: "以下为新消息" });
       await expect(boundary).toBeVisible();
+      const peerAvatar = timeline.locator(`img[src="${avatarUrl}"]`).first();
+      await expect(peerAvatar).toBeVisible();
+      await expect.poll(() => peerAvatar.evaluate((image: HTMLImageElement) => image.naturalWidth)).toBeGreaterThan(0);
       await expect(timeline.locator(`[role="separator"] + [data-message-id="${second.id}"]`)).toHaveCount(1);
       await expect(memberGroupBtn.getByTestId("unread-badge")).toHaveCount(0);
       const stale = await pageMember.request.post(readPath, { data: { messageId: first.id } });
