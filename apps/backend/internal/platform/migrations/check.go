@@ -162,12 +162,38 @@ func inspectCompatibleMigrationSchema(ctx context.Context, queryer Queryer, appl
 			err = inspectReviewed036Schema(ctx, queryer)
 		case ReleaseCompatibilityAgentMigrationName:
 			err = inspectReviewed037Schema(ctx, queryer)
+		case ReleaseCompatibilityGitHubLoginEmailMigrationName:
+			err = inspectReviewed038Schema(ctx, queryer)
 		default:
 			return errors.Join(ErrSchemaCompatibility, ErrCompatibleMigrationSchema)
 		}
 		if err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+const compatibleGitHubLoginEmailColumnSQL = `SELECT EXISTS (
+  SELECT 1 FROM information_schema.columns
+  WHERE table_schema = current_schema() AND table_name = 'users' AND column_name = 'github_login_email'
+    AND data_type = 'text' AND domain_name IS NULL AND is_nullable = 'YES' AND column_default IS NULL
+    AND is_identity = 'NO' AND is_generated = 'NEVER'
+)`
+
+func inspectReviewed038Schema(ctx context.Context, queryer Queryer) error {
+	var valid bool
+	err := readCompatibilityRows(ctx, queryer, compatibleGitHubLoginEmailColumnSQL, "compatible login email column", func(rows Rows) error {
+		if rows.Next() {
+			return rows.Scan(&valid)
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if !valid {
+		return errors.Join(ErrSchemaCompatibility, ErrCompatibleMigrationSchema)
 	}
 	return nil
 }

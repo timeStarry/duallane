@@ -17,6 +17,10 @@
     {
       "name": "037_agent_task_authorization.sql",
       "sha256": "5003a7f2c6dcc32f336a3b20f4730fa8c6e5208d6551ae7ffe460c45eca21b03"
+    },
+    {
+      "name": "038_github_login_email.sql",
+      "sha256": "a4a6b4beb053af30767ee1f874bfc3d89e3b4d6a18ad2abc08464ee9967c2664"
     }
   ]
 }

@@ -21,6 +21,8 @@ import {
   REVIEWED_V1_MIGRATION_SHA256,
   REVIEWED_AGENT_MIGRATION,
   REVIEWED_AGENT_MIGRATION_SHA256,
+  REVIEWED_GITHUB_LOGIN_EMAIL_MIGRATION,
+  REVIEWED_GITHUB_LOGIN_EMAIL_MIGRATION_SHA256,
   SCHEMA_COMPATIBILITY_LABEL,
   SCHEMA_COMPATIBILITY_USER,
   SCHEMA_INSPECTION_SCRIPT,
@@ -342,6 +344,35 @@ test("037 rejects a tampered hash and a policy that omits schema 36", () => {
 
   const missing36 = inventory(mobileMigrations(), agentBridgePolicy());
   expectCode(() => compareSchemaInventories(bridge, missing36), "target_policy_agent_baseline_missing");
+});
+
+test("schema 37 bridge authorizes only the reviewed 038 expansion", () => {
+  const migration = {
+    name: REVIEWED_GITHUB_LOGIN_EMAIL_MIGRATION,
+    sha256: REVIEWED_GITHUB_LOGIN_EMAIL_MIGRATION_SHA256,
+  };
+  const bridgePolicy = agentBridgePolicy();
+  bridgePolicy.compatibleMigrations.push(migration);
+  const bridge = inventory(agentMigrations(), bridgePolicy);
+  const target = inventory([...agentMigrations(), migration], bridgePolicy);
+  assert.deepEqual(compareSchemaInventories(bridge, target), {
+    status: "compatible",
+    previousMigrationCount: 37,
+    targetMigrationCount: 38,
+    commonMigrationCount: 37,
+    addedMigrationCount: 1,
+    removedMigrationCount: 0,
+    policyUsed: true,
+  });
+
+  const prior = inventory(agentMigrations(), agentBridgePolicy());
+  expectCode(() => compareSchemaInventories(prior, target), "migration_not_authorized");
+
+  const tamperedTarget = inventory([...agentMigrations(), { ...migration, sha256: hash("f") }], bridgePolicy);
+  expectCode(() => compareSchemaInventories(bridge, tamperedTarget), "target_policy_hash_mismatch");
+
+  const prematureBridge = inventory(v1Migrations(), bridgePolicy);
+  expectCode(() => compareSchemaInventories(prematureBridge, target), "previous_policy_github_login_email_baseline_missing");
 });
 
 test("exact-image inspection preserves the 034 bridge and 035 prior-policy boundary", async () => {

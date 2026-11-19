@@ -562,6 +562,13 @@ expansion fails before the migration container starts. The policy asset is
 public/non-secret and mode `0644`; it is the same JSON embedded in the Go
 checker, not an operator-editable configuration or a backup substitute.
 
+For migration 038, first release the reviewed schema 37 bridge from `main` and
+capture its verified recovery snapshot. The bridge declares the exact digest of
+`038_github_login_email.sql` and runs with the existing schema 37 inventory.
+Then release the GitHub email login change through the normal upgrade with that
+snapshot. The bridge can recover on schema 38 after the nullable column is
+added. Each release uses its own increasing application version.
+
 Fencing records each original restart policy and retry limit, temporarily sets
 `restart=no`, and verifies the owner is stopped. A known-good replacement gets
 the recorded policy only after authority, readiness, and recovery checks pass.

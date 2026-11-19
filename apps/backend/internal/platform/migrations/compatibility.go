@@ -23,6 +23,9 @@ const (
 	ReleaseCompatibilityV1MigrationName       = "036_v1_clean_architecture.sql"
 	ReleaseCompatibilityV1MigrationSHA256     = "2649cdb3baf4130cee7040a492869db161dd89cae52c3afd27bc8bad922f28f4"
 
+	ReleaseCompatibilityGitHubLoginEmailMigrationName   = "038_github_login_email.sql"
+	ReleaseCompatibilityGitHubLoginEmailMigrationSHA256 = "a4a6b4beb053af30767ee1f874bfc3d89e3b4d6a18ad2abc08464ee9967c2664"
+
 	maxReleaseCompatibilityPolicyBytes = 16 << 10
 	maxReleaseCompatibilityJSONDepth   = 32
 )
@@ -156,14 +159,15 @@ func validateReleaseCompatibilityPolicy(policy CompatibilityPolicy) error {
 	if policy.BaseMigration != ReleaseCompatibilityBaseMigration || !IsCanonicalName(policy.BaseMigration) {
 		return fmt.Errorf("%w: base migration is not the reviewed canonical baseline", ErrInvalidCompatibilityPolicy)
 	}
-	if len(policy.CompatibleMigrations) != 1 && len(policy.CompatibleMigrations) != 2 && len(policy.CompatibleMigrations) != 3 && len(policy.CompatibleMigrations) != 4 {
-		return fmt.Errorf("%w: compatibility allow-list is not a reviewed sequence", ErrInvalidCompatibilityPolicy)
-	}
 	reviewed := [...]CompatibleMigration{
 		{Name: ReleaseCompatibilityMigrationName, SHA256: ReleaseCompatibilityMigrationSHA256},
 		{Name: ReleaseCompatibilityMobileMigrationName, SHA256: ReleaseCompatibilityMobileMigrationSHA256},
 		{Name: ReleaseCompatibilityV1MigrationName, SHA256: ReleaseCompatibilityV1MigrationSHA256},
 		{Name: ReleaseCompatibilityAgentMigrationName, SHA256: ReleaseCompatibilityAgentMigrationSHA256},
+		{Name: ReleaseCompatibilityGitHubLoginEmailMigrationName, SHA256: ReleaseCompatibilityGitHubLoginEmailMigrationSHA256},
+	}
+	if len(policy.CompatibleMigrations) == 0 || len(policy.CompatibleMigrations) > len(reviewed) {
+		return fmt.Errorf("%w: compatibility allow-list is not a reviewed sequence", ErrInvalidCompatibilityPolicy)
 	}
 	seen := make(map[string]struct{}, len(policy.CompatibleMigrations))
 	for index, migration := range policy.CompatibleMigrations {
@@ -233,29 +237,18 @@ func isCanonicalReleaseCompatibilityBaseline(required []string) bool {
 // Each exception applies only to its exact preceding canonical history. Keeping
 // the historical policy readable does not make a schema-33 binary support 035.
 func (policy CompatibilityPolicy) allowsAfter(required []string, name string) bool {
-	if !policy.allows(name) {
+	baseCount := len(canonicalReleaseCompatibilityBaseline)
+	requiredSuffixCount := len(required) - baseCount
+	if requiredSuffixCount < 0 || requiredSuffixCount >= len(policy.CompatibleMigrations) ||
+		!isCanonicalReleaseCompatibilityBaseline(required[:baseCount]) {
 		return false
 	}
-	if isCanonicalReleaseCompatibilityBaseline(required) {
-		return name == ReleaseCompatibilityMigrationName
+	for index, requiredName := range required[baseCount:] {
+		if requiredName != policy.CompatibleMigrations[index].Name {
+			return false
+		}
 	}
-	if len(required) == len(canonicalReleaseCompatibilityBaseline)+1 &&
-		required[len(required)-1] == ReleaseCompatibilityMigrationName &&
-		isCanonicalReleaseCompatibilityBaseline(required[:len(required)-1]) {
-		return name == ReleaseCompatibilityMobileMigrationName
-	}
-	if len(required) == len(canonicalReleaseCompatibilityBaseline)+2 &&
-		required[len(required)-2] == ReleaseCompatibilityMigrationName &&
-		required[len(required)-1] == ReleaseCompatibilityMobileMigrationName &&
-		isCanonicalReleaseCompatibilityBaseline(required[:len(required)-2]) {
-		return name == ReleaseCompatibilityV1MigrationName
-	}
-	return len(required) == len(canonicalReleaseCompatibilityBaseline)+3 &&
-		required[len(required)-3] == ReleaseCompatibilityMigrationName &&
-		required[len(required)-2] == ReleaseCompatibilityMobileMigrationName &&
-		required[len(required)-1] == ReleaseCompatibilityV1MigrationName &&
-		isCanonicalReleaseCompatibilityBaseline(required[:len(required)-3]) &&
-		name == ReleaseCompatibilityAgentMigrationName
+	return name == policy.CompatibleMigrations[requiredSuffixCount].Name
 }
 
 func rejectDuplicateJSONMembers(data []byte) error {
