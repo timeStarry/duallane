@@ -153,7 +153,7 @@ func TestPGBotGatewayAuthenticationContextAndReplay(t *testing.T) {
 		t.Fatal("attachment private field leaked into bot context")
 	}
 
-	events, err := repository.ListEventsAfter(ctx, DefaultSpaceID, 0, 10)
+	events, err := repository.ListReplayEvents(ctx, authValue, ReplayRange{Through: 1}, now.Add(-ReplayWindow), 10)
 	if err != nil || len(events) != 1 || events[0].Sequence != 1 {
 		t.Fatalf("persistent event list = %#v err=%v", events, err)
 	}

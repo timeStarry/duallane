@@ -237,6 +237,10 @@ func TestWebSocketInvalidHelloIsBoundedAndSyncCanResume(t *testing.T) {
 		PayloadJSON: []byte(`{"messageId":"message_ws_2"}`), CreatedAt: repo.now(),
 	}}
 	repo.triggers["conv_direct:message_ws_2"] = &MessageTrigger{AuthorID: "owner_1", PlainText: "three", ContentJSON: []byte(`{"blocks":[{"type":"text","text":"three"}]}`)}
+	repo.deliveries = []DeliveryRecord{{
+		ID: "delivery_ws_2", BotID: authValue.BotID, SpaceID: authValue.SpaceID,
+		Sequence: 3, EventID: "event_ws_2", Status: "delivered", ExpiresAt: repo.now(),
+	}}
 	handler := NewWebSocketHandler(WebSocketHandlerOptions{Gateway: service, SpaceID: authValue.SpaceID, PollInterval: time.Hour, HeartbeatInterval: time.Hour})
 	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)
@@ -264,7 +268,7 @@ func TestWebSocketInvalidHelloIsBoundedAndSyncCanResume(t *testing.T) {
 		t.Fatal(err)
 	}
 	syncRequired := readWebSocketObject(t, connection)
-	if syncRequired["type"] != "sync_required" || syncRequired["reason"] != "replay_window_exceeded" {
+	if syncRequired["type"] != "sync_required" || syncRequired["reason"] != "replay_window_exceeded" || syncRequired["resumeSequence"] != float64(3) {
 		t.Fatalf("sync frame = %#v", syncRequired)
 	}
 }

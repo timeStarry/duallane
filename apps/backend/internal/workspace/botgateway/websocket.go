@@ -449,7 +449,8 @@ func (h *WebSocketHandler) handleMessage(ctx context.Context, writer *webSocketW
 		if sequenceErr != nil {
 			return cursor, authValue, writer.errorFrame(sequenceErr) == nil
 		}
-		result, err := h.gateway.Replay(ctx, authValue, ReplayInput{LastSequence: lastSequence})
+		cursor = lastSequence
+		result, err := h.gateway.Replay(ctx, authValue, ReplayInput{LastSequence: cursor})
 		if err != nil {
 			if isInvalidToken(err) {
 				closeWebSocket(writer.connection, websocket.StatusPolicyViolation, "bot token revoked")
@@ -457,28 +458,16 @@ func (h *WebSocketHandler) handleMessage(ctx context.Context, writer *webSocketW
 			}
 			return cursor, authValue, writer.errorFrame(err) == nil
 		}
-		if result.SyncRequired {
-			if err := writer.write(map[string]any{"version": Version, "type": "sync_required", "currentSequence": result.CurrentSequence, "reason": result.Reason}); err != nil {
+		if !result.SyncRequired {
+			if err := writer.write(map[string]any{"version": Version, "type": "ready", "currentSequence": result.CurrentSequence, "replayCount": len(result.Events), "hasMore": result.HasMore}); err != nil {
 				return cursor, authValue, false
 			}
-			return result.CurrentSequence, authValue, true
 		}
-		if err := writer.write(map[string]any{"version": Version, "type": "ready", "currentSequence": result.CurrentSequence, "replayCount": len(result.Events), "hasMore": result.HasMore}); err != nil {
+		next, keepOpen, err := writer.writeReplay(result, cursor)
+		if err != nil {
 			return cursor, authValue, false
 		}
-		cursor = lastSequence
-		for _, event := range result.Events {
-			if err := writer.write(map[string]any{"version": Version, "type": "event", "event": event}); err != nil {
-				return cursor, authValue, false
-			}
-			if event.Sequence > cursor {
-				cursor = event.Sequence
-			}
-		}
-		if !result.HasMore && result.CurrentSequence > cursor {
-			cursor = result.CurrentSequence
-		}
-		return cursor, authValue, true
+		return next, authValue, keepOpen
 	}
 
 	switch typ {
@@ -537,24 +526,27 @@ func (h *WebSocketHandler) pollReplay(ctx context.Context, writer *webSocketWrit
 	if err != nil {
 		return current, ReplayResult{}, cursor, true, err
 	}
+	next, keepOpen, err := writer.writeReplay(result, cursor)
+	return current, result, next, keepOpen, err
+}
+
+func (w *webSocketWriter) writeReplay(result ReplayResult, cursor int64) (int64, bool, error) {
 	if result.SyncRequired {
-		if err := writer.write(map[string]any{"version": Version, "type": "sync_required", "currentSequence": result.CurrentSequence, "reason": result.Reason}); err != nil {
-			return current, result, cursor, false, err
+		frame := map[string]any{"version": Version, "type": "sync_required", "currentSequence": result.CurrentSequence, "reason": result.Reason}
+		if result.ResumeSequence > cursor {
+			frame["resumeSequence"] = result.ResumeSequence
 		}
-		return current, result, result.CurrentSequence, true, nil
+		if err := w.write(frame); err != nil {
+			return cursor, false, err
+		}
+		return max(cursor, result.ResumeSequence), result.ResumeSequence > cursor, nil
 	}
 	for _, event := range result.Events {
-		if err := writer.write(map[string]any{"version": Version, "type": "event", "event": event}); err != nil {
-			return current, result, cursor, false, err
-		}
-		if event.Sequence > cursor {
-			cursor = event.Sequence
+		if err := w.write(map[string]any{"version": Version, "type": "event", "event": event}); err != nil {
+			return cursor, false, err
 		}
 	}
-	if !result.HasMore && result.CurrentSequence > cursor {
-		cursor = result.CurrentSequence
-	}
-	return current, result, cursor, true, nil
+	return max(cursor, result.ResumeSequence), true, nil
 }
 
 func decodeObject(payload []byte) (map[string]json.RawMessage, error) {

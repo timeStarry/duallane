@@ -106,6 +106,32 @@ retry route. Partial success preserves already published items. Logs and doctor
 summaries contain stage/count/error codes, never message text, model stderr,
 paths, tokens or source URLs. Transport health and business health are separate.
 
+### Gateway replay and resume
+
+The gateway captures the committed space sequence before each bounded scan.
+Discovery pages over potential Bot events after the supplied checkpoint. A new
+delivery is eligible within the replay window measured from its source event. Previously
+queued deliveries keep their recorded expiry. Replay checks the Bot's current
+scope, the sender and conversation, and the current trigger before delivery.
+Unrelated space traffic and settled expiry or revocation never suppress live
+pending records. Admission limits can defer new discoveries while existing
+queued work drains. Retries reuse the same Bot delivery and event identity.
+An ACK for the same Bot and event is idempotent.
+
+For HTTP `/api/bot/v2/updates`, `currentSequence` reports the captured space
+head for diagnostics. After handling all returned events, clients can use
+`resumeSequence` as the next `afterSequence` for that scan. `hasMore` can
+be true on an empty page. If admission is temporarily full, the resume position
+can stay at the requested checkpoint until capacity becomes available. The
+WebSocket connection uses the same scan rules internally.
+
+Managed SDK listeners checkpoint only after durable intake and a matching ACK.
+A `syncRequired` response or `sync_required` frame with a certified
+`resumeSequence` can continue when the queue has no live deliveries in the
+settled range. A server head alone gives no resume authority. An ahead cursor or
+sync without a safe position requires explicit recovery. The requested
+checkpoint is the lower bound for replay, including intentional setup baselines.
+
 ## Media and attachment policy
 
 Public-media fetch is opt-in operator policy and does not expand the model's
@@ -142,9 +168,9 @@ files. Credentials are reused; updating never requires automatic re-pairing.
 
 App 1.2 enforces SDK admission for every Bot, independently of access-policy
 version. All setup, Bot HTTP and WebSocket requests declare
-`X-DualLane-SDK-Version`; only compatible stable 1.x versions at least 1.2.1 are
-accepted. The admission floor follows the published SDK release, including patch
-releases: older SDKs must upgrade, with no legacy compatibility window.
+`X-DualLane-SDK-Version`. Admission accepts compatible stable versions in the
+1.x series starting at 1.2.2. The floor follows published SDK releases,
+including patches. Older SDKs must upgrade.
 Missing/invalid/older/incompatible declarations return 426
 `sdk.upgrade_required` with safe upgrade locations. The runtime stops retries
 and requires a verified update while preserving its profile, bridge and policy.
@@ -152,7 +178,7 @@ The declaration is public compatibility metadata, never identity or authority;
 current authentication, scopes, task and object checks remain mandatory.
 Human Session APIs, public downloads, health checks and P2P do not use this gate.
 WebSocket adapters may declare the same version through the public subprotocol
-`duallane-agent-sdk-1.2.1`; conflicts and duplicate declarations fail closed.
+`duallane-agent-sdk-1.2.2`. Conflicts and duplicate declarations fail closed.
 Bot authentication remains mandatory and credentials never move to URLs.
 
 Implementation order: transport/authorization regressions; structured task and
@@ -173,6 +199,8 @@ Comet service and production deployment remain unchanged until separately select
 - Incoming image/text, scope denial, revoked context and cross-conversation read.
 - Cross-turn resend, reuse, expiry, deletion and mismatched artifact identity.
 - Disconnect/recovery, 401/403 pause, transient failure bounds and HTML success.
+- HTTP and WebSocket replay across unrelated events, with paging, expiry,
+  revocation, and stable delivery identity on repeated ACK.
 - Digest drift, corrupt downloads, incompatible protocol and local-policy survival.
 
 Synthetic integration proves the complete control flow without production data.

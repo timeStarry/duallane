@@ -91,29 +91,118 @@ test("Feishu card helpers use the explicit Gateway conversion input", async () =
   assert.equal(Object.hasOwn(calls[0].body, "token"), false);
 });
 
-test("sync-required completes only after the runtime rebuild callback", async () => {
+test("certified WebSocket sync waits for the callback and leaves the accepted cursor unchanged", async (t) => {
   let rebuilt = false;
+  let socket;
+  const events = [];
   const client = new DualLaneAgentClient({
     url: "https://duallane.example.com",
     token: TOKEN,
     heartbeatMs: 120_000,
     webSocketFactory: async (url, options) => {
-      const socket = new FakeSocket(url, options);
-      socket.helloResponse = { version: 1, type: "sync_required", currentSequence: 42, reason: "replay_window_exceeded" };
+      socket = new FakeSocket(url, options);
+      socket.helloResponse = { version: 1, type: "sync_required", currentSequence: 42, resumeSequence: 24, reason: "replay_window_exceeded" };
       return socket;
     },
     fetch: async () => jsonResponse({})
   });
+  t.after(() => client.stop());
   await client.connect({
     lastSequence: 1,
     async onSyncRequired(state) {
-      assert.equal(state.currentSequence, 42);
+      assert.deepEqual(state, { currentSequence: 42, resumeSequence: 24, reason: "replay_window_exceeded" });
       rebuilt = true;
-    }
+    },
+    onEvent: (event) => events.push(event.sequence),
   });
   assert.equal(rebuilt, true);
-  assert.equal(client.lastSequence, 42);
-  client.stop();
+  assert.equal(client.lastSequence, 1);
+  socket.emitFrame({ version: 1, type: "event", event: { eventId: "evt_after_gap", sequence: 25 } });
+  await waitFor(() => client.lastSequence === 25);
+  assert.deepEqual(events, [25]);
+});
+
+test("uncertified WebSocket sync terminates without changing the accepted cursor", async (t) => {
+  let socket;
+  const states = [];
+  const client = new DualLaneAgentClient({
+    url: "https://duallane.example.com",
+    token: TOKEN,
+    webSocketFactory: async (url, options) => {
+      socket = new FakeSocket(url, options);
+      socket.helloResponse = { version: 1, type: "sync_required", currentSequence: 100, reason: "replay_window_exceeded" };
+      return socket;
+    },
+    fetch: async () => jsonResponse({}),
+  });
+  t.after(() => client.stop());
+  await assert.rejects(client.connect({
+    lastSequence: 7,
+    onSyncRequired: (state) => states.push(state),
+    onCursorAdvance: assert.fail,
+  }), { code: "gateway.sync_required" });
+  assert.deepEqual(states, [{ currentSequence: 100, reason: "replay_window_exceeded" }]);
+  assert.equal(client.lastSequence, 7);
+  assert.equal(socket.readyState, 3);
+});
+
+test("WebSocket checkpoints only after admission and a matching ACK receipt", async (t) => {
+  let socket;
+  let admit;
+  const trace = [];
+  const client = new DualLaneAgentClient({
+    url: "https://duallane.example.com",
+    token: TOKEN,
+    webSocketFactory: async (url, options) => {
+      socket = new FakeSocket(url, options);
+      socket.autoAck = false;
+      return socket;
+    },
+    fetch: async () => jsonResponse({}),
+  });
+  t.after(() => client.stop());
+  await client.connect({
+    lastSequence: 5,
+    onEvent: () => new Promise((resolve) => { admit = resolve; }),
+    onCursorAdvance: (sequence) => trace.push(sequence),
+  });
+  socket.emitFrame({ version: 1, type: "event", event: { eventId: "evt", sequence: 9 } });
+  await waitFor(() => Boolean(admit));
+  assert.equal(socket.sent.some((frame) => frame.type === "ack"), false);
+  admit();
+  await waitFor(() => socket.sent.some((frame) => frame.type === "ack"));
+  assert.equal(client.lastSequence, 5);
+  assert.deepEqual(trace, []);
+  socket.emitFrame({ version: 1, type: "ack", acknowledged: true, eventId: "evt", sequence: 9 });
+  await waitFor(() => trace.length === 1);
+  assert.equal(client.lastSequence, 9);
+  assert.deepEqual(trace, [9]);
+});
+
+test("aborting asynchronous WebSocket admission leaves the event unacknowledged", async (t) => {
+  let socket;
+  let admit;
+  const stop = new AbortController();
+  const client = new DualLaneAgentClient({
+    url: "https://duallane.example.com",
+    token: TOKEN,
+    webSocketFactory: async (url, options) => (socket = new FakeSocket(url, options)),
+    fetch: async () => jsonResponse({}),
+  });
+  t.after(() => client.stop());
+  await client.connect({
+    lastSequence: 5,
+    signal: stop.signal,
+    onEvent: () => new Promise((resolve) => { admit = resolve; }),
+    onCursorAdvance: assert.fail,
+  });
+  socket.emitFrame({ version: 1, type: "event", event: { eventId: "evt", sequence: 9 } });
+  await waitFor(() => Boolean(admit));
+  stop.abort();
+  admit();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(socket.sent.some((frame) => frame.type === "ack"), false);
+  assert.equal(client.lastSequence, 5);
 });
 
 test("reconnect resumes from the last acknowledged event sequence", async () => {
@@ -196,7 +285,7 @@ test("failed admission invalidates later events and a queued sync checkpoint", a
   });
   socket.emitFrame({ version: 1, type: "event", event: { eventId: "first", sequence: 1 } });
   socket.emitFrame({ version: 1, type: "event", event: { eventId: "second", sequence: 2 } });
-  socket.emitFrame({ version: 1, type: "sync_required", currentSequence: 100 });
+  socket.emitFrame({ version: 1, type: "sync_required", currentSequence: 100, resumeSequence: 80 });
   await waitFor(() => errors > 0);
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(events, ["first"]);
@@ -208,6 +297,7 @@ test("failed admission invalidates later events and a queued sync checkpoint", a
 class FakeSocket extends EventEmitter {
   readyState = 0;
   sent = [];
+  autoAck = true;
   helloResponse = { version: 1, type: "ready", currentSequence: 7, replayCount: 0, hasMore: false };
 
   constructor(url, options) {
@@ -224,7 +314,7 @@ class FakeSocket extends EventEmitter {
     const frame = JSON.parse(raw);
     this.sent.push(frame);
     if (frame.type === "hello") queueMicrotask(() => this.emitFrame(this.helloResponse));
-    if (frame.type === "ack") queueMicrotask(() => this.emitFrame({ version: 1, type: "ack", acknowledged: true, eventId: frame.eventId, sequence: frame.sequence }));
+    if (frame.type === "ack" && this.autoAck) queueMicrotask(() => this.emitFrame({ version: 1, type: "ack", acknowledged: true, eventId: frame.eventId, sequence: frame.sequence }));
   }
 
   emitFrame(frame) {

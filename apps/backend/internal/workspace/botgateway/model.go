@@ -516,6 +516,7 @@ type AcknowledgeResult struct {
 type ReplayResult struct {
 	Events          []Delivery `json:"events"`
 	CurrentSequence int64      `json:"currentSequence"`
+	ResumeSequence  int64      `json:"resumeSequence,omitempty"`
 	SyncRequired    bool       `json:"syncRequired"`
 	Reason          string     `json:"reason,omitempty"`
 	HasMore         bool       `json:"hasMore,omitempty"`
@@ -524,6 +525,12 @@ type ReplayResult struct {
 type ReplayInput struct {
 	LastSequence int64
 	Limit        int
+}
+
+// ReplayRange bounds a page by the client's position and the captured space head.
+type ReplayRange struct {
+	After   int64
+	Through int64
 }
 
 func projectSettings(settings *Settings) *SettingsProjection {

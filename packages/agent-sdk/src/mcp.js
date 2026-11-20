@@ -653,7 +653,6 @@ export function createDualLaneMcpServer(options = {}) {
             timeoutMs: remainingMs,
             conversationId: filterConv,
             ack: false,
-            onSyncRequired: () => { throw new DualLaneAgentError("gateway.sync_required", "Event replay requires explicit resynchronization"); },
           });
           if (polled.timeout) {
             return {
@@ -702,9 +701,6 @@ export function createDualLaneMcpServer(options = {}) {
                   lastSequence: startSeq,
                   requiresAck: true,
                 });
-              },
-              async onSyncRequired() {
-                throw new DualLaneAgentError("gateway.sync_required", "Event replay requires explicit resynchronization");
               },
               onError(err) {
                 if (!settled && !err?.retryable) {

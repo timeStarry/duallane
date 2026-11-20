@@ -12,7 +12,7 @@ func TestValidateVersionCompatibilityBoundary(t *testing.T) {
 			t.Errorf("ValidateVersion(%q) = %v, want accepted", version, err)
 		}
 	}
-	for _, version := range []string{"", "1", "1.1.99", "1.2.0", "0.9.0", "2.0.0", "v1.2.0", "1.2.0-beta", "01.2.0", "1.02.0", "1.2"} {
+	for _, version := range []string{"", "1", "1.1.99", "1.2.0", "1.2.1", "0.9.0", "2.0.0", "v1.2.0", "1.2.0-beta", "01.2.0", "1.02.0", "1.2"} {
 		if err := ValidateVersion(version); err == nil {
 			t.Errorf("ValidateVersion(%q) accepted unsupported version", version)
 		}

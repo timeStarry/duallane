@@ -126,29 +126,26 @@ func (r *fakeRepository) CurrentSequence(context.Context, string) (int64, error)
 	}
 	return result, nil
 }
-func (r *fakeRepository) EarliestSequence(context.Context, string) (int64, error) {
-	var result int64
-	for _, event := range r.events {
-		if result == 0 || event.Sequence < result {
-			result = event.Sequence
+func (r *fakeRepository) ListReplayEvents(_ context.Context, value *Auth, scan ReplayRange, since time.Time, limit int) ([]EventRecord, error) {
+	rows := make([]EventRecord, 0, limit)
+	queued := make(map[int64]bool)
+	for _, delivery := range r.deliveries {
+		if delivery.BotID == value.BotID && delivery.SpaceID == value.SpaceID {
+			queued[delivery.Sequence] = true
 		}
 	}
-	return result, nil
-}
-func (r *fakeRepository) ListRecentEvents(context.Context, string, int) ([]EventRecord, error) {
-	rows := append([]EventRecord(nil), r.events...)
-	sort.Slice(rows, func(i, j int) bool { return rows[i].Sequence > rows[j].Sequence })
-	return rows, nil
-}
-func (r *fakeRepository) ListEventsAfter(_ context.Context, _ string, after int64, limit int) ([]EventRecord, error) {
-	rows := make([]EventRecord, 0, limit)
 	for _, event := range r.events {
-		if event.Sequence > after {
+		if event.SpaceID != value.SpaceID || event.Sequence <= scan.After || event.Sequence > scan.Through ||
+			!event.CreatedAt.After(since) || eventScope(event.EventType) == "" || queued[event.Sequence] {
+			continue
+		}
+		if event.EventType == "bot.runtime_upgrade" || r.members[event.ConversationID+":"+value.UserID] {
 			rows = append(rows, event)
 		}
-		if len(rows) == limit {
-			break
-		}
+	}
+	sort.Slice(rows, func(i, j int) bool { return rows[i].Sequence < rows[j].Sequence })
+	if len(rows) > limit {
+		rows = rows[:limit]
 	}
 	return rows, nil
 }
@@ -161,10 +158,11 @@ func (r *fakeRepository) GetEvent(_ context.Context, _, id string) (*EventRecord
 	}
 	return nil, nil
 }
-func (r *fakeRepository) ListDeliveriesAfter(_ context.Context, botID, spaceID string, after int64, now time.Time, limit int) ([]DeliveryRecord, error) {
+func (r *fakeRepository) ListPendingDeliveries(_ context.Context, botID, spaceID string, scan ReplayRange, now time.Time, limit int) ([]DeliveryRecord, error) {
 	rows := make([]DeliveryRecord, 0, limit)
 	for _, delivery := range r.deliveries {
-		if delivery.BotID == botID && delivery.SpaceID == spaceID && delivery.Sequence > after && delivery.Status != "expired" && delivery.ExpiresAt.After(now) {
+		if delivery.BotID == botID && delivery.SpaceID == spaceID && delivery.Sequence > scan.After && delivery.Sequence <= scan.Through &&
+			(delivery.Status == "queued" || delivery.Status == "delivered") && delivery.ExpiresAt.After(now) {
 			rows = append(rows, delivery)
 		}
 	}
@@ -173,15 +171,6 @@ func (r *fakeRepository) ListDeliveriesAfter(_ context.Context, botID, spaceID s
 		rows = rows[:limit]
 	}
 	return rows, nil
-}
-func (r *fakeRepository) EarliestDeliverySequence(_ context.Context, botID, spaceID string, now time.Time) (int64, error) {
-	var result int64
-	for _, delivery := range r.deliveries {
-		if delivery.BotID == botID && delivery.SpaceID == spaceID && delivery.Status != "expired" && delivery.ExpiresAt.After(now) && (result == 0 || delivery.Sequence < result) {
-			result = delivery.Sequence
-		}
-	}
-	return result, nil
 }
 func (r *fakeRepository) GetMessageTrigger(_ context.Context, _, conversationID, messageID string) (*MessageTrigger, error) {
 	return r.triggers[conversationID+":"+messageID], nil
@@ -253,16 +242,19 @@ func (r *fakeRepository) InsertIdempotency(_ context.Context, input IdempotencyR
 }
 func (r *fakeRepository) ExpireDeliveries(_ context.Context, botID, spaceID string, now time.Time) error {
 	for index := range r.deliveries {
-		if r.deliveries[index].BotID == botID && r.deliveries[index].SpaceID == spaceID && !r.deliveries[index].ExpiresAt.After(now) {
-			r.deliveries[index].Status = "expired"
+		row := &r.deliveries[index]
+		if row.BotID == botID && row.SpaceID == spaceID &&
+			(row.Status == "queued" || row.Status == "delivered") && !row.ExpiresAt.After(now) {
+			row.Status = "expired"
 		}
 	}
 	return nil
 }
 func (r *fakeRepository) ExpireDelivery(_ context.Context, id string) error {
 	for index := range r.deliveries {
-		if r.deliveries[index].ID == id {
-			r.deliveries[index].Status = "expired"
+		row := &r.deliveries[index]
+		if row.ID == id && (row.Status == "queued" || row.Status == "delivered") {
+			row.Status = "expired"
 		}
 	}
 	return nil
@@ -276,27 +268,33 @@ func (r *fakeRepository) InsertDelivery(_ context.Context, input DeliveryInsert)
 	r.deliveries = append(r.deliveries, DeliveryRecord{ID: input.ID, BotID: input.BotID, SpaceID: input.SpaceID, Sequence: input.Sequence, EventID: input.EventID, EventType: input.EventType, ConversationID: input.ConversationID, PayloadJSON: append([]byte(nil), input.PayloadJSON...), Status: input.Status, Attempts: input.Attempts, CreatedAt: input.CreatedAt, ExpiresAt: input.ExpiresAt})
 	return true, nil
 }
-func (r *fakeRepository) MarkDeliveryDelivered(_ context.Context, id string, _ time.Time) error {
-	for index := range r.deliveries {
-		if r.deliveries[index].ID == id && r.deliveries[index].Status != "expired" {
-			r.deliveries[index].Status = "delivered"
-			r.deliveries[index].Attempts++
-		}
-	}
-	return nil
-}
-func (r *fakeRepository) AcknowledgeDelivery(_ context.Context, botID, spaceID, eventID string, sequence int64, _ time.Time) (bool, error) {
+func (r *fakeRepository) MarkDeliveryDelivered(_ context.Context, id string, now time.Time) (int, error) {
 	for index := range r.deliveries {
 		row := &r.deliveries[index]
-		if row.BotID != botID || row.SpaceID != spaceID || row.Status == "acked" {
-			continue
-		}
-		if (eventID != "" && row.EventID == eventID) || (eventID == "" && row.Sequence == sequence) {
-			row.Status = "acked"
-			return true, nil
+		if row.ID == id && (row.Status == "queued" || row.Status == "delivered") && row.ExpiresAt.After(now) {
+			row.Status = "delivered"
+			row.Attempts++
+			return row.Attempts, nil
 		}
 	}
-	return false, nil
+	return 0, nil
+}
+func (r *fakeRepository) AcknowledgeDelivery(_ context.Context, botID, spaceID, eventID string, sequence int64, now time.Time) (bool, bool, error) {
+	for index := range r.deliveries {
+		row := &r.deliveries[index]
+		if row.BotID != botID || row.SpaceID != spaceID ||
+			(eventID != "" && row.EventID != eventID) || (sequence != 0 && row.Sequence != sequence) {
+			continue
+		}
+		if row.Status == "acked" {
+			return true, false, nil
+		}
+		if row.Status == "delivered" && row.ExpiresAt.After(now) {
+			row.Status = "acked"
+			return true, true, nil
+		}
+	}
+	return false, false, nil
 }
 func (r *fakeRepository) MarkProcessed(context.Context, string, string, time.Time) error {
 	r.processed++
@@ -306,9 +304,10 @@ func (r *fakeRepository) WriteAudit(_ context.Context, input AuditInput) error {
 	r.audits = append(r.audits, input)
 	return nil
 }
-func (r *fakeRepository) HasExpiredDeliveryAfter(_ context.Context, botID, spaceID string, after int64, now time.Time) (bool, error) {
+func (r *fakeRepository) HasExpiredDeliveries(_ context.Context, botID, spaceID string, scan ReplayRange, now time.Time) (bool, error) {
 	for _, row := range r.deliveries {
-		if row.BotID == botID && row.SpaceID == spaceID && row.Sequence > after && (row.Status == "expired" || !row.ExpiresAt.After(now)) {
+		if row.BotID == botID && row.SpaceID == spaceID && row.Sequence > scan.After && row.Sequence <= scan.Through &&
+			(row.Status == "expired" || ((row.Status == "queued" || row.Status == "delivered") && !row.ExpiresAt.After(now))) {
 			return true, nil
 		}
 	}

@@ -24,12 +24,9 @@ type ReadRepository interface {
 	GetAttachment(ctx context.Context, spaceID, attachmentID string) (*AttachmentRecord, error)
 
 	CurrentSequence(ctx context.Context, spaceID string) (int64, error)
-	EarliestSequence(ctx context.Context, spaceID string) (int64, error)
-	ListRecentEvents(ctx context.Context, spaceID string, limit int) ([]EventRecord, error)
-	ListEventsAfter(ctx context.Context, spaceID string, afterSequence int64, limit int) ([]EventRecord, error)
+	ListReplayEvents(ctx context.Context, value *Auth, scan ReplayRange, since time.Time, limit int) ([]EventRecord, error)
 	GetEvent(ctx context.Context, spaceID, eventID string) (*EventRecord, error)
-	ListDeliveriesAfter(ctx context.Context, botID, spaceID string, afterSequence int64, now time.Time, limit int) ([]DeliveryRecord, error)
-	EarliestDeliverySequence(ctx context.Context, botID, spaceID string, now time.Time) (int64, error)
+	ListPendingDeliveries(ctx context.Context, botID, spaceID string, scan ReplayRange, now time.Time, limit int) ([]DeliveryRecord, error)
 	GetMessageTrigger(ctx context.Context, spaceID, conversationID, messageID string) (*MessageTrigger, error)
 	GetSender(ctx context.Context, spaceID, conversationID, userID string) (*Sender, error)
 	VisibilityMember(ctx context.Context, botID, spaceID, userID string) (bool, error)
@@ -77,8 +74,8 @@ type Tx interface {
 	ExpireDeliveries(ctx context.Context, botID, spaceID string, now time.Time) error
 	ExpireDelivery(ctx context.Context, id string) error
 	InsertDelivery(ctx context.Context, input DeliveryInsert) (bool, error)
-	MarkDeliveryDelivered(ctx context.Context, id string, now time.Time) error
-	AcknowledgeDelivery(ctx context.Context, botID, spaceID, eventID string, sequence int64, now time.Time) (bool, error)
+	MarkDeliveryDelivered(ctx context.Context, id string, now time.Time) (attempts int, err error)
+	AcknowledgeDelivery(ctx context.Context, botID, spaceID, eventID string, sequence int64, now time.Time) (acknowledged, changed bool, err error)
 	MarkProcessed(ctx context.Context, botID, spaceID string, now time.Time) error
 	WriteAudit(ctx context.Context, input AuditInput) error
 }
