@@ -189,6 +189,7 @@ export function InspectorPane() {
     inspectorFile,
     closeInspector,
     openLightbox,
+    openProfileModal,
   } = useLaneStore();
   const {
     isPreviewMode,
@@ -218,6 +219,8 @@ export function InspectorPane() {
 
   const [detailsSubTab, setDetailsSubTab] = useState<DetailsSubTab>("settings");
   const [remoteFilesByConv, setRemoteFilesByConv] = useState<Record<string, SearchFileHit[]>>({});
+  const [remoteFilesHasMoreByConv, setRemoteFilesHasMoreByConv] = useState<Record<string, boolean>>({});
+  const [loadingMoreMedia, setLoadingMoreMedia] = useState(false);
 
   const [titleDraftByConv, setTitleDraftByConv] = useState<Record<string, string>>({});
   const [savingGroup, setSavingGroup] = useState(false);
@@ -250,11 +253,11 @@ export function InspectorPane() {
     let active = true;
     const convId = activeConversationId;
     void apiV1
-      .search("", "files")
+      .listConversationMedia(convId, "all", 40, 0)
       .then((res) => {
         if (!active) return;
-        const filtered = (res.files || []).filter((f) => f.conversationId === convId);
-        setRemoteFilesByConv((prev) => ({ ...prev, [convId]: filtered }));
+        setRemoteFilesByConv((prev) => ({ ...prev, [convId]: res.items || [] }));
+        setRemoteFilesHasMoreByConv((prev) => ({ ...prev, [convId]: Boolean(res.hasMore) }));
       })
       .catch(() => {
         if (!active) return;
@@ -264,6 +267,27 @@ export function InspectorPane() {
       active = false;
     };
   }, [activeConversationId, detailsSubTab, inspectorOpen, inspectorTab, isPreviewMode]);
+
+  const handleLoadMoreMedia = async () => {
+    if (!activeConversationId || loadingMoreMedia) return;
+    const convId = activeConversationId;
+    const existing = remoteFilesByConv[convId] || [];
+    setLoadingMoreMedia(true);
+    try {
+      const res = await apiV1.listConversationMedia(convId, "all", 40, existing.length);
+      setRemoteFilesByConv((prev) => {
+        const cur = prev[convId] || [];
+        const seen = new Set(cur.map((f) => f.id));
+        return {
+          ...prev,
+          [convId]: [...cur, ...(res.items || []).filter((f) => !seen.has(f.id))],
+        };
+      });
+      setRemoteFilesHasMoreByConv((prev) => ({ ...prev, [convId]: Boolean(res.hasMore) }));
+    } finally {
+      setLoadingMoreMedia(false);
+    }
+  };
 
   useEffect(() => {
     if (!inspectorOpen) return;
@@ -595,13 +619,22 @@ export function InspectorPane() {
                       onCheckedChange={setAlsoSendToChannel}
                     />
                   </div>
-                  <div className="dl-glass-pill flex items-center gap-2 rounded-xl border border-dl-border-hairline px-2.5 py-1.5">
-                    <input
+                  <div className="dl-glass-pill flex items-end gap-2 rounded-xl border border-dl-border-hairline px-2.5 py-1.5">
+                    <textarea
+                      rows={1}
                       value={replyText}
                       onChange={(e) => setReplyText(e.target.value)}
-                      placeholder="在线程中回复…"
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+                          e.preventDefault();
+                          if (replyText.trim() && !sending) {
+                            e.currentTarget.form?.requestSubmit();
+                          }
+                        }
+                      }}
+                      placeholder="在线程中回复… (Shift+Enter 换行)"
                       aria-label="在线程中回复"
-                      className="min-w-0 flex-1 bg-transparent text-[13px] text-dl-text-primary placeholder:text-dl-text-tertiary focus:outline-none"
+                      className="min-w-0 max-h-28 flex-1 resize-none bg-transparent py-1 text-[13px] leading-snug text-dl-text-primary placeholder:text-dl-text-tertiary focus:outline-none"
                     />
                     <IconButton
                       type="submit"
@@ -749,6 +782,19 @@ export function InspectorPane() {
                         </div>
                       )}
                     </div>
+
+                    {remoteFilesHasMoreByConv[activeConv.id] && (
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        size="sm"
+                        className="w-full text-xs"
+                        disabled={loadingMoreMedia}
+                        onClick={() => void handleLoadMoreMedia()}
+                      >
+                        {loadingMoreMedia ? "正在加载更多…" : "加载更多历史图片与文件"}
+                      </Button>
+                    )}
                   </div>
                 ) : (
                   <div className="dl-scroll flex-1 overflow-y-auto p-4 space-y-5">
@@ -1113,6 +1159,7 @@ export function InspectorPane() {
                             !id.startsWith("usr_system_") &&
                             id !== currentUser?.id &&
                             (isBotMember ||
+                              Boolean(activeConv.capabilities?.canRemoveMembers) ||
                               currentUser?.role === "owner" ||
                               currentUser?.role === "admin");
                           return (
@@ -1120,37 +1167,47 @@ export function InspectorPane() {
                               key={id}
                               className="flex items-center gap-2.5 rounded-xl px-2 py-1.5 hover:bg-dl-surface-subtle/50 transition-colors"
                             >
-                              <Avatar
-                                name={displayLabel}
-                                src={m?.avatarUrl}
-                                kind={isBotMember ? "bot" : "human"}
-                                color={m?.avatarColor}
+                              <Button
+                                type="button"
+                                variant="ghost"
                                 size="sm"
-                              />
-                              <div className="min-w-0 flex-1">
-                                <div className="flex items-center gap-1.5 min-w-0">
-                                  <span className="truncate text-xs font-medium text-dl-text-primary">
-                                    {displayLabel}
-                                  </span>
-                                  {m?.remark && (
-                                    <span className="shrink-0 rounded-full bg-dl-lane-shared/12 px-1.5 py-0.5 text-[9px] font-medium text-dl-lane-shared">
-                                      已备注
+                                className="h-auto min-w-0 flex-1 justify-start gap-2.5 px-0 py-0 text-left hover:bg-transparent"
+                                onClick={() => openProfileModal(id)}
+                              >
+                                <Avatar
+                                  name={displayLabel}
+                                  src={m?.avatarUrl}
+                                  kind={isBotMember ? "bot" : "human"}
+                                  color={m?.avatarColor}
+                                  size="sm"
+                                />
+                                <div className="min-w-0 flex-1">
+                                  <div className="flex items-center gap-1.5 min-w-0">
+                                    <span className="truncate text-xs font-medium text-dl-text-primary">
+                                      {displayLabel}
                                     </span>
-                                  )}
-                                  {isBotMember && (
-                                    <span className="shrink-0 rounded-full bg-dl-lane-shared/14 px-1.5 py-0.5 text-[9px] font-semibold text-dl-lane-shared">
-                                      BOT
-                                    </span>
-                                  )}
+                                    {m?.remark && (
+                                      <span className="shrink-0 rounded-full bg-dl-lane-shared/12 px-1.5 py-0.5 text-[9px] font-medium text-dl-lane-shared">
+                                        已备注
+                                      </span>
+                                    )}
+                                    {isBotMember && (
+                                      <span className="shrink-0 rounded-full bg-dl-lane-shared/14 px-1.5 py-0.5 text-[9px] font-semibold text-dl-lane-shared">
+                                        BOT
+                                      </span>
+                                    )}
+                                  </div>
+                                  <div className="truncate text-[11px] text-dl-text-tertiary">
+                                    {isBotMember
+                                      ? m?.description || "智能体机器人"
+                                      : m?.statusText
+                                      ? m.statusText
+                                      : m?.remark && m.nickname
+                                      ? `原昵称：${m.nickname}`
+                                      : "空间成员"}
+                                  </div>
                                 </div>
-                                <div className="truncate text-[11px] text-dl-text-tertiary">
-                                  {isBotMember
-                                    ? m?.description || "智能体机器人"
-                                    : m?.remark && m.nickname
-                                    ? `原昵称：${m.nickname}`
-                                    : "空间成员"}
-                                </div>
-                              </div>
+                              </Button>
                               <div className="flex items-center gap-0.5 shrink-0">
                                 {canSetRemark && (
                                   <MemberRemarkPopoverButton

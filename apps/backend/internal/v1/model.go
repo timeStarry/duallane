@@ -39,6 +39,9 @@ type V1BootstrapMember struct {
 	AvatarURL   string `json:"avatarUrl,omitempty"`
 	AvatarColor string `json:"avatarColor,omitempty"`
 	BotOnline   *bool  `json:"botOnline,omitempty"`
+	Online      *bool  `json:"online,omitempty"`
+	Bio         string `json:"bio,omitempty"`
+	StatusText  string `json:"statusText,omitempty"`
 }
 
 type V1BootstrapAuth struct {
@@ -52,26 +55,49 @@ type V1BootstrapPolicy struct {
 	UsedTodayBytes  int64 `json:"usedTodayBytes"`
 }
 
+type V1ConversationCapabilities struct {
+	CanEditGroup     bool `json:"canEditGroup"`
+	CanInviteMembers bool `json:"canInviteMembers"`
+	CanRemoveMembers bool `json:"canRemoveMembers"`
+	CanPin           bool `json:"canPin"`
+}
+
 type V1BootstrapConversation struct {
-	ID                    string   `json:"id"`
-	Type                  string   `json:"type"`
-	Title                 string   `json:"title"`
-	DisplayTitle          string   `json:"displayTitle"`
-	AvatarEmoji           *string  `json:"avatarEmoji,omitempty"`
-	UnreadCount           int      `json:"unreadCount"`
-	MentionCount          int      `json:"mentionCount"`
-	FirstUnreadMessageID  *string  `json:"firstUnreadMessageId"`
-	LastReadMessageID     *string  `json:"lastReadMessageId"`
-	LastReadAt            *string  `json:"lastReadAt"`
-	LastReadSeq           *int64   `json:"lastReadSeq"`
-	NotificationLevel     string   `json:"notificationLevel,omitempty"`
-	PinnedMessageIDs      []string `json:"pinnedMessageIds"`
-	MemberIDs             []string `json:"memberIds"`
-	LastMessagePlainText  string   `json:"lastMessagePlainText,omitempty"`
-	LastMessageSenderID   string   `json:"lastMessageSenderId,omitempty"`
-	LastMessageSenderName string   `json:"lastMessageSenderName,omitempty"`
-	LastMessageAt         *string  `json:"lastMessageAt,omitempty"`
-	PeerLastReadAt        *string  `json:"peerLastReadAt,omitempty"`
+	ID                    string                      `json:"id"`
+	Type                  string                      `json:"type"`
+	Title                 string                      `json:"title"`
+	DisplayTitle          string                      `json:"displayTitle"`
+	AvatarEmoji           *string                     `json:"avatarEmoji,omitempty"`
+	MyGroupRole           string                      `json:"myGroupRole,omitempty"`
+	Capabilities          *V1ConversationCapabilities `json:"capabilities,omitempty"`
+	UnreadCount           int                         `json:"unreadCount"`
+	MentionCount          int                         `json:"mentionCount"`
+	FirstUnreadMessageID  *string                     `json:"firstUnreadMessageId"`
+	LastReadMessageID     *string                     `json:"lastReadMessageId"`
+	LastReadAt            *string                     `json:"lastReadAt"`
+	LastReadSeq           *int64                      `json:"lastReadSeq"`
+	NotificationLevel     string                      `json:"notificationLevel,omitempty"`
+	PinnedMessageIDs      []string                    `json:"pinnedMessageIds"`
+	MemberIDs             []string                    `json:"memberIds"`
+	LastMessagePlainText  string                      `json:"lastMessagePlainText,omitempty"`
+	LastMessageSenderID   string                      `json:"lastMessageSenderId,omitempty"`
+	LastMessageSenderName string                      `json:"lastMessageSenderName,omitempty"`
+	LastMessageAt         *string                     `json:"lastMessageAt,omitempty"`
+	PeerLastReadAt        *string                     `json:"peerLastReadAt,omitempty"`
+}
+
+type SearchOptions struct {
+	Query          string
+	Scope          string
+	ConversationID string
+	SenderID       string
+	Limit          int
+	Offset         int
+}
+
+type ConversationMediaResponse struct {
+	Items   []SearchFileHit `json:"items"`
+	HasMore bool            `json:"hasMore"`
 }
 
 type ConversationReadResult struct {

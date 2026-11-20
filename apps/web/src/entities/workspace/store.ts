@@ -49,6 +49,9 @@ export interface V1User {
   avatarUrl?: string;
   avatarColor?: string;
   description?: string;
+  bio?: string;
+  statusText?: string;
+  online?: boolean;
   botOnline?: boolean;
   /** Configured Bot ID; omitted for humans, system Bots, and unauthorized viewers. */
   botId?: string;
@@ -120,7 +123,7 @@ export interface V1Message {
   creationSeq?: number;
   createdAt: string;
   status?: "sending" | "sent" | "read" | "failed";
-  reactions: Record<string, { count: number; reactedByMe: boolean }>;
+  reactions: Record<string, { count: number; reactedByMe: boolean; users?: string[] }>;
   attachments?: V1MessageAttachment[];
   card?: DualLaneCardKitDocument;
   cardReferences?: WorkspaceCardReference[];
@@ -145,6 +148,13 @@ export interface V1Conversation {
   lastMessageSenderName?: string;
   notificationLevel?: ConversationNotificationLevel;
   peerLastReadAt?: string;
+  myGroupRole?: string;
+  capabilities?: {
+    canEditGroup: boolean;
+    canInviteMembers: boolean;
+    canRemoveMembers: boolean;
+    canPin: boolean;
+  };
 }
 
 export interface DraftEntry {
@@ -462,17 +472,21 @@ function sanitizePlainTextMentions(
   return result.replace(/@__duallane_[A-Za-z0-9_-]+/g, "@Bot");
 }
 
-function mapRawReactions(raw: unknown): Record<string, { count: number; reactedByMe: boolean }> {
-  const out: Record<string, { count: number; reactedByMe: boolean }> = {};
+function mapRawReactions(raw: unknown): Record<string, { count: number; reactedByMe: boolean; users?: string[] }> {
+  const out: Record<string, { count: number; reactedByMe: boolean; users?: string[] }> = {};
   if (!Array.isArray(raw)) return out;
   for (const item of raw as Array<Record<string, unknown>>) {
     const key = String(item.emoteKey || item.emoji || item.key || "");
     if (!key) continue;
     const count = Number(item.count || 0);
     if (count > 0) {
+      const users = Array.isArray(item.users)
+        ? item.users.map(String).filter(Boolean)
+        : undefined;
       out[key] = {
         count,
         reactedByMe: Boolean(item.reactedByCurrentUser ?? item.reactedByMe),
+        ...(users && users.length > 0 ? { users } : {}),
       };
     }
   }
@@ -770,6 +784,20 @@ function upsertRawMemberRecord(
           : undefined
         : prev?.botId
       : undefined;
+  const nextBio =
+    typeof m.bio === "string"
+      ? m.bio.trim() || undefined
+      : prev?.bio;
+  const nextStatusText =
+    typeof m.statusText === "string"
+      ? m.statusText.trim() || undefined
+      : prev?.statusText;
+  const nextOnline =
+    role === "bot"
+      ? undefined
+      : typeof m.online === "boolean"
+      ? m.online
+      : prev?.online;
   const nextSearchDiscoverable =
     typeof m.searchDiscoverable === "boolean"
       ? m.searchDiscoverable
@@ -784,6 +812,9 @@ function upsertRawMemberRecord(
     avatarUrl: nextAvatarUrl,
     avatarColor: nextAvatarColor,
     description: nextDescription,
+    ...(nextBio ? { bio: nextBio } : {}),
+    ...(nextStatusText ? { statusText: nextStatusText } : {}),
+    ...(typeof nextOnline === "boolean" ? { online: nextOnline } : {}),
     ...(typeof nextBotOnline === "boolean" ? { botOnline: nextBotOnline } : {}),
     ...(nextBotId ? { botId: nextBotId } : {}),
     ...(typeof nextSearchDiscoverable === "boolean"
@@ -1014,6 +1045,17 @@ export function parseBootstrapPayload(raw: Record<string, unknown>) {
       lastMessageSenderName: resolvedLastSenderName,
       notificationLevel,
       peerLastReadAt,
+      ...(typeof c.myGroupRole === "string" && c.myGroupRole ? { myGroupRole: c.myGroupRole } : {}),
+      ...(c.capabilities && typeof c.capabilities === "object"
+        ? {
+            capabilities: {
+              canEditGroup: Boolean((c.capabilities as Record<string, unknown>).canEditGroup),
+              canInviteMembers: Boolean((c.capabilities as Record<string, unknown>).canInviteMembers),
+              canRemoveMembers: Boolean((c.capabilities as Record<string, unknown>).canRemoveMembers),
+              canPin: Boolean((c.capabilities as Record<string, unknown>).canPin),
+            },
+          }
+        : {}),
     };
     const rawMsgs = Array.isArray(c.latestMessages)
       ? c.latestMessages
@@ -3333,26 +3375,56 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
     toggleReaction: async (conversationId, messageId, emoji) => {
       const normalizedKey = normalizeReactionEmoteKey(emoji);
       if (!normalizedKey) return;
+      const myUserId = get().currentUser?.id;
+      const prevMessages = get().messagesByConv[conversationId] || [];
+      const targetMsg = prevMessages.find((m) => m.id === messageId);
+      const prevReactions = targetMsg ? { ...targetMsg.reactions } : null;
+
       set((s) => ({
         messagesByConv: {
           ...s.messagesByConv,
           [conversationId]: (s.messagesByConv[conversationId] || []).map((m) => {
             if (m.id !== messageId) return m;
-            const prev = m.reactions[normalizedKey] || { count: 0, reactedByMe: false };
+            const prev = m.reactions[normalizedKey] || { count: 0, reactedByMe: false, users: [] };
             const nextReacted = !prev.reactedByMe;
             const nextCount = Math.max(0, prev.count + (nextReacted ? 1 : -1));
+            const prevUsers = Array.isArray(prev.users) ? prev.users : [];
+            const nextUsers = myUserId
+              ? nextReacted
+                ? prevUsers.includes(myUserId)
+                  ? prevUsers
+                  : [...prevUsers, myUserId]
+                : prevUsers.filter((id) => id !== myUserId)
+              : prevUsers;
             const nextReactions = { ...m.reactions };
             if (nextCount === 0) {
               delete nextReactions[normalizedKey];
             } else {
-              nextReactions[normalizedKey] = { count: nextCount, reactedByMe: nextReacted };
+              nextReactions[normalizedKey] = {
+                count: nextCount,
+                reactedByMe: nextReacted,
+                ...(nextUsers.length > 0 ? { users: nextUsers } : {}),
+              };
             }
             return { ...m, reactions: nextReactions };
           }),
         },
       }));
       if (!get().isPreviewMode) {
-        await apiV1.reactToMessage(messageId, normalizedKey).catch(() => {});
+        try {
+          await apiV1.reactToMessage(messageId, normalizedKey);
+        } catch {
+          if (prevReactions) {
+            set((s) => ({
+              messagesByConv: {
+                ...s.messagesByConv,
+                [conversationId]: (s.messagesByConv[conversationId] || []).map((m) =>
+                  m.id === messageId ? { ...m, reactions: prevReactions } : m
+                ),
+              },
+            }));
+          }
+        }
       }
     },
 

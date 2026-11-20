@@ -99,6 +99,11 @@ export interface SearchResponse {
   files: SearchFileHit[];
 }
 
+export interface ConversationMediaResponse {
+  items: SearchFileHit[];
+  hasMore: boolean;
+}
+
 export interface ThreadReplyItem {
   id: string;
   conversationId: string;
@@ -229,12 +234,39 @@ export const apiV1 = {
   // v1.0 Incremental Sync & Search
   sync: (sinceSeq: number) =>
     requestJSON<SyncDeltaResponse>(`/api/v1/sync?sinceSeq=${sinceSeq}`),
-  search: async (q: string, scope: "all" | "messages" | "files" = "all"): Promise<SearchResponse> => {
+  search: async (
+    q: string,
+    scope: "all" | "messages" | "files" = "all",
+    opts?: { conversationId?: string; senderId?: string; limit?: number; offset?: number }
+  ): Promise<SearchResponse> => {
     const params = new URLSearchParams({ q, scope });
+    if (opts?.conversationId) params.set("conversationId", opts.conversationId);
+    if (opts?.senderId) params.set("senderId", opts.senderId);
+    if (typeof opts?.limit === "number") params.set("limit", String(opts.limit));
+    if (typeof opts?.offset === "number" && opts.offset > 0) params.set("offset", String(opts.offset));
     const raw = await requestJSON<Partial<SearchResponse>>(`/api/v1/search?${params.toString()}`);
     return {
       messages: Array.isArray(raw.messages) ? raw.messages : [],
       files: Array.isArray(raw.files) ? raw.files : [],
+    };
+  },
+  listConversationMedia: async (
+    conversationId: string,
+    kind: "all" | "image" | "file" = "all",
+    limit = 40,
+    offset = 0
+  ): Promise<ConversationMediaResponse> => {
+    const params = new URLSearchParams({
+      kind,
+      limit: String(limit),
+      offset: String(offset),
+    });
+    const raw = await requestJSON<Partial<ConversationMediaResponse>>(
+      `/api/v1/conversations/${encodeURIComponent(conversationId)}/media?${params.toString()}`
+    );
+    return {
+      items: Array.isArray(raw.items) ? raw.items : [],
+      hasMore: Boolean(raw.hasMore),
     };
   },
 

@@ -74,7 +74,22 @@ function saveStoredSidebarWidth(width: number): void {
 function formatShortTime(iso?: string): string {
   if (!iso) return "";
   try {
-    return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return "";
+    const now = new Date();
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const startOfMsgDay = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+    const diffDays = Math.round((startOfToday - startOfMsgDay) / 86_400_000);
+    if (diffDays === 0) {
+      return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    }
+    if (diffDays === 1) {
+      return "昨天";
+    }
+    if (d.getFullYear() === now.getFullYear()) {
+      return `${d.getMonth() + 1}/${d.getDate()}`;
+    }
+    return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`;
   } catch {
     return "";
   }
@@ -139,6 +154,8 @@ export function ConversationSidebar() {
   } = useWorkspaceStore();
 
   const [filter, setFilter] = useState<FilterTab>("all");
+  const [confirmLeaveTarget, setConfirmLeaveTarget] = useState<{ id: string; title: string } | null>(null);
+  const [leavingGroup, setLeavingGroup] = useState(false);
   const [query, setQuery] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
   const [groupTitle, setGroupTitle] = useState("");
@@ -597,7 +614,7 @@ export function ConversationSidebar() {
                       <ContextMenuItem
                         tone="danger"
                         icon={<LogOut className="size-4" />}
-                        onSelect={() => void leaveGroup(conv.id)}
+                        onSelect={() => setConfirmLeaveTarget({ id: conv.id, title: conv.title })}
                       >
                         退出群聊
                       </ContextMenuItem>
@@ -609,6 +626,49 @@ export function ConversationSidebar() {
           })
         )}
       </div>
+
+      <Dialog
+        open={Boolean(confirmLeaveTarget)}
+        onOpenChange={(open) => {
+          if (!open && !leavingGroup) setConfirmLeaveTarget(null);
+        }}
+      >
+        <DialogContent size="sm">
+          <DialogHeader>
+            <DialogTitle>确认退出群聊？</DialogTitle>
+            <DialogDescription>
+              退出「{confirmLeaveTarget?.title}」后，你将不再接收该群消息。若你是群主，群主权限将自动移交给其他成员。
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex justify-end gap-2 px-6 pb-5 pt-2">
+            <Button
+              type="button"
+              variant="ghost"
+              disabled={leavingGroup}
+              onClick={() => setConfirmLeaveTarget(null)}
+            >
+              取消
+            </Button>
+            <Button
+              type="button"
+              variant="danger"
+              busy={leavingGroup}
+              onClick={async () => {
+                if (!confirmLeaveTarget) return;
+                setLeavingGroup(true);
+                try {
+                  await leaveGroup(confirmLeaveTarget.id);
+                  setConfirmLeaveTarget(null);
+                } finally {
+                  setLeavingGroup(false);
+                }
+              }}
+            >
+              确认退出
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
         <DialogContent>

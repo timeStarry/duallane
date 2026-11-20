@@ -44,7 +44,10 @@ interface LaneUIState {
   adminConsoleOpen: boolean;
   adminConsoleTab: SpaceAdminTab;
   searchOpen: boolean;
+  searchConversationId: string | null;
   contactsOpen: boolean;
+  profileModalUserId: string | null;
+  pendingMention: { conversationId: string; userId: string; label: string; nonce: number } | null;
   lightboxOpen: boolean;
   lightboxItems: LightboxItem[];
   lightboxIndex: number;
@@ -66,7 +69,12 @@ interface LaneUIState {
   closeAdminConsole: () => void;
   setAdminConsoleTab: (tab: SpaceAdminTab) => void;
   setSearchOpen: (open: boolean) => void;
+  openSearchInConversation: (conversationId: string | null) => void;
   setContactsOpen: (open: boolean) => void;
+  openProfileModal: (userId: string) => void;
+  closeProfileModal: () => void;
+  requestMention: (conversationId: string, userId: string, label: string) => void;
+  clearPendingMention: () => void;
   openLightbox: (items: LightboxItem[], index: number) => void;
   closeLightbox: () => void;
   setLightboxIndex: (index: number) => void;
@@ -175,7 +183,10 @@ export const useLaneStore = create<LaneUIState>((set, get) => ({
   adminConsoleOpen: false,
   adminConsoleTab: "overview",
   searchOpen: false,
+  searchConversationId: null,
   contactsOpen: false,
+  profileModalUserId: null,
+  pendingMention: null,
   lightboxOpen: false,
   lightboxItems: [],
   lightboxIndex: 0,
@@ -278,8 +289,22 @@ export const useLaneStore = create<LaneUIState>((set, get) => ({
     })),
   closeAdminConsole: () => set({ adminConsoleOpen: false }),
   setAdminConsoleTab: (adminConsoleTab) => set({ adminConsoleTab }),
-  setSearchOpen: (searchOpen) => set({ searchOpen }),
+  setSearchOpen: (searchOpen) =>
+    set((s) => ({
+      searchOpen,
+      searchConversationId: searchOpen ? s.searchConversationId : null,
+    })),
+  openSearchInConversation: (conversationId) =>
+    set({
+      searchOpen: true,
+      searchConversationId: conversationId,
+    }),
   setContactsOpen: (contactsOpen) => set({ contactsOpen }),
+  openProfileModal: (profileModalUserId) => set({ profileModalUserId }),
+  closeProfileModal: () => set({ profileModalUserId: null }),
+  requestMention: (conversationId, userId, label) =>
+    set({ pendingMention: { conversationId, userId, label, nonce: Date.now() } }),
+  clearPendingMention: () => set({ pendingMention: null }),
   openLightbox: (lightboxItems, lightboxIndex) =>
     set({ lightboxOpen: true, lightboxItems, lightboxIndex }),
   closeLightbox: () => set({ lightboxOpen: false }),

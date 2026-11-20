@@ -262,9 +262,16 @@ func (r *PGRepository) GetBootstrap(ctx context.Context, actorID string, now tim
 			coalesce(ur.remark, ''),
 			coalesce(bs_meta.description, ''),
 			coalesce(u.avatar_url, bs_meta.avatar_url, ''),
-			coalesce(up_bot.prefs_json, '{}'),
+			coalesce(up_mem.prefs_json, '{}'),
 			u.kind,
 			sm.role,
+			CASE
+				WHEN u.kind = 'human' THEN EXISTS (
+					SELECT 1 FROM workspace_presence_leases p
+					WHERE p.space_id = $1 AND p.user_id = u.id AND p.lease_until > $5
+				)
+				ELSE FALSE
+			END AS human_online,
 			COALESCE(b_meta.id, '') AS bot_id,
 			b_meta.id IS NOT NULL AS is_external_bot,
 			CASE
@@ -290,7 +297,7 @@ func (r *PGRepository) GetBootstrap(ctx context.Context, actorID string, now tim
 		LEFT JOIN workspace_agent_bots b_meta ON b_meta.space_id = $1 AND b_meta.bot_user_id = u.id AND b_meta.status <> 'deleted'
 		LEFT JOIN workspace_agent_bot_settings bs_meta ON bs_meta.bot_id = b_meta.id AND bs_meta.space_id = $1
 		LEFT JOIN workspace_agent_bot_connections bc_meta ON bc_meta.bot_id = b_meta.id AND bc_meta.space_id = $1
-		LEFT JOIN user_preferences up_bot ON up_bot.user_id = u.id AND u.kind = 'bot'
+		LEFT JOIN user_preferences up_mem ON up_mem.user_id = u.id
 		WHERE sm.space_id = $1
 			AND sm.removed_at IS NULL
 			AND (
@@ -336,19 +343,19 @@ func (r *PGRepository) GetBootstrap(ctx context.Context, actorID string, now tim
 				)
 			)
 		ORDER BY sm.joined_at ASC, u.id ASC
-	`, r.spaceID, actorID, actorRole, botHeartbeatCutoff)
+	`, r.spaceID, actorID, actorRole, botHeartbeatCutoff, nowUTC)
 	if err != nil {
 		return V1BootstrapResponse{}, err
 	}
 	members := make([]V1BootstrapMember, 0, 16)
 	memberByID := make(map[string]V1BootstrapMember, 16)
 	for memberRows.Next() {
-		var mID, mGitHub, mDisplay, mNick, mRemark, mDesc, mAvatar, mBotPrefsRaw, mKind, mRole string
+		var mID, mGitHub, mDisplay, mNick, mRemark, mDesc, mAvatar, mPrefsRaw, mKind, mRole string
 		var botID, botOwnerID, botVisibility string
 		var botAllowDirect, botAllowGroup, botSharedApprovedGroup bool
 		var rawAccessPolicy []byte
-		var isExternalBot, botOnline bool
-		if scanErr := memberRows.Scan(&mID, &mGitHub, &mDisplay, &mNick, &mRemark, &mDesc, &mAvatar, &mBotPrefsRaw, &mKind, &mRole, &botID, &isExternalBot, &botOnline, &botOwnerID, &botVisibility, &botAllowDirect, &botAllowGroup, &rawAccessPolicy, &botSharedApprovedGroup); scanErr != nil {
+		var humanOnline, isExternalBot, botOnline bool
+		if scanErr := memberRows.Scan(&mID, &mGitHub, &mDisplay, &mNick, &mRemark, &mDesc, &mAvatar, &mPrefsRaw, &mKind, &mRole, &humanOnline, &botID, &isExternalBot, &botOnline, &botOwnerID, &botVisibility, &botAllowDirect, &botAllowGroup, &rawAccessPolicy, &botSharedApprovedGroup); scanErr != nil {
 			memberRows.Close()
 			return V1BootstrapResponse{}, scanErr
 		}
@@ -365,7 +372,25 @@ func (r *PGRepository) GetBootstrap(ctx context.Context, actorID string, now tim
 		projected := projectBootstrapMember(
 			mID, mGitHub, mDisplay, mNick, mRemark, mAvatar, mKind, mRole, actorID, actorRole,
 		)
-		if mKind == "bot" {
+		if mKind == "human" {
+			onlineVal := humanOnline
+			projected.Online = &onlineVal
+			if mPrefsRaw != "" && mPrefsRaw != "{}" {
+				var memPrefs map[string]any
+				if json.Unmarshal([]byte(mPrefsRaw), &memPrefs) == nil {
+					if rawBio, ok := memPrefs["bio"].(string); ok {
+						if trimmed := strings.TrimSpace(rawBio); trimmed != "" {
+							projected.Bio = trimmed
+						}
+					}
+					if rawStatus, ok := memPrefs["statusText"].(string); ok {
+						if trimmed := strings.TrimSpace(rawStatus); trimmed != "" {
+							projected.StatusText = trimmed
+						}
+					}
+				}
+			}
+		} else if mKind == "bot" {
 			if isExternalBot && strings.TrimSpace(botID) != "" && mID != "usr_system_beacon" && mID != "usr_system_echo" {
 				projected.BotID = strings.TrimSpace(botID)
 			}
@@ -376,9 +401,9 @@ func (r *PGRepository) GetBootstrap(ctx context.Context, actorID string, now tim
 				onlineVal := botOnline
 				projected.BotOnline = &onlineVal
 			}
-			if mBotPrefsRaw != "" && mBotPrefsRaw != "{}" {
+			if mPrefsRaw != "" && mPrefsRaw != "{}" {
 				var botPrefs map[string]any
-				if json.Unmarshal([]byte(mBotPrefsRaw), &botPrefs) == nil {
+				if json.Unmarshal([]byte(mPrefsRaw), &botPrefs) == nil {
 					if rawCol, ok := botPrefs["botColor"].(string); ok && IsValidBotColor(rawCol) && rawCol != "" {
 						projected.AvatarColor = rawCol
 					}
@@ -387,6 +412,9 @@ func (r *PGRepository) GetBootstrap(ctx context.Context, actorID string, now tim
 		}
 		if mID == actorID {
 			projected.Role = actorRole
+			currentUser.Online = projected.Online
+			currentUser.Bio = projected.Bio
+			currentUser.StatusText = projected.StatusText
 		}
 		members = append(members, projected)
 		memberByID[mID] = projected
@@ -408,6 +436,7 @@ func (r *PGRepository) GetBootstrap(ctx context.Context, actorID string, now tim
 					c.avatar_emoji,
 					c.created_at,
 					cm.user_id,
+					coalesce(cm.role, 'member') AS my_group_role,
 					cm.last_read_message_id,
 					cm.last_read_seq,
 					cm.last_read_at,
@@ -445,6 +474,7 @@ func (r *PGRepository) GetBootstrap(ctx context.Context, actorID string, now tim
 				cm.type,
 				cm.title,
 				cm.avatar_emoji,
+				cm.my_group_role,
 				cm.notification_level,
 				CASE
 					WHEN latest.id IS NULL THEN ''
@@ -537,6 +567,7 @@ func (r *PGRepository) GetBootstrap(ctx context.Context, actorID string, now tim
 				&c.Type,
 				&c.Title,
 				&c.AvatarEmoji,
+				&c.MyGroupRole,
 				&c.NotificationLevel,
 				&c.LastMessagePlainText,
 				&c.LastMessageSenderID,
@@ -557,6 +588,27 @@ func (r *PGRepository) GetBootstrap(ctx context.Context, actorID string, now tim
 			c.NotificationLevel = strings.TrimSpace(c.NotificationLevel)
 			if c.NotificationLevel != "mentions" && c.NotificationLevel != "muted" {
 				c.NotificationLevel = "all"
+			}
+			c.MyGroupRole = strings.TrimSpace(c.MyGroupRole)
+			if c.Type == "group" {
+				if c.MyGroupRole == "" {
+					c.MyGroupRole = "member"
+				}
+				canRemove := actorRole == "owner" || actorRole == "admin" || c.MyGroupRole == "owner" || c.MyGroupRole == "admin"
+				c.Capabilities = &V1ConversationCapabilities{
+					CanEditGroup:     true,
+					CanInviteMembers: true,
+					CanRemoveMembers: canRemove,
+					CanPin:           true,
+				}
+			} else {
+				c.MyGroupRole = ""
+				c.Capabilities = &V1ConversationCapabilities{
+					CanEditGroup:     false,
+					CanInviteMembers: false,
+					CanRemoveMembers: false,
+					CanPin:           true,
+				}
 			}
 			if c.LastMessageSenderID != "" {
 				if mem, ok := memberByID[c.LastMessageSenderID]; ok && strings.TrimSpace(mem.DisplayName) != "" {
@@ -806,22 +858,59 @@ func (r *PGRepository) SyncDelta(ctx context.Context, actorID string, sinceSeq i
 	}, rows.Err()
 }
 
+func escapeLikePattern(s string) string {
+	return strings.NewReplacer(
+		`\`, `\\`,
+		`%`, `\%`,
+		`_`, `\_`,
+	).Replace(s)
+}
+
 func (r *PGRepository) Search(ctx context.Context, actorID, query, scope string, limit int) (SearchResponse, error) {
+	return r.SearchWithOptions(ctx, actorID, SearchOptions{
+		Query: query,
+		Scope: scope,
+		Limit: limit,
+	})
+}
+
+func (r *PGRepository) SearchWithOptions(ctx context.Context, actorID string, opts SearchOptions) (SearchResponse, error) {
 	resp := SearchResponse{
 		Messages: []SearchMessageHit{},
 		Files:    []SearchFileHit{},
 	}
-	likePattern := "%" + query + "%"
+	query := strings.TrimSpace(opts.Query)
+	scope := strings.TrimSpace(opts.Scope)
+	if scope == "" {
+		scope = "all"
+	}
+	limit := opts.Limit
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > 50 {
+		limit = 50
+	}
+	offset := opts.Offset
+	if offset < 0 {
+		return SearchResponse{}, fmt.Errorf("%w: offset 不能为负数", ErrInvalidInput)
+	}
+	conversationID := strings.TrimSpace(opts.ConversationID)
+	senderID := strings.TrimSpace(opts.SenderID)
+	likePattern := "%" + escapeLikePattern(query) + "%"
 
 	if scope == "all" || scope == "messages" {
-		rows, err := r.pool.Query(ctx, `
-			SELECT m.id, m.conversation_id, coalesce(m.thread_root_id, ''), coalesce(m.author_id, ''), coalesce(u.display_name, ''), m.plain_text, m.created_at
-			FROM messages m
-			JOIN conversation_members cm ON cm.conversation_id = m.conversation_id AND cm.user_id = $1 AND cm.removed_at IS NULL
-			LEFT JOIN users u ON u.id = m.author_id
-			WHERE m.space_id = $2
-			  AND m.deleted_at IS NULL
-			  AND NOT EXISTS (
+		args := []any{actorID, r.spaceID}
+		whereClauses := []string{
+			"m.space_id = $2",
+			"m.deleted_at IS NULL",
+			"m.recalled_at IS NULL",
+			"m.topic_id IS NULL",
+			`NOT EXISTS (
+				SELECT 1 FROM message_hidden_states h
+				WHERE h.message_id = m.id AND h.user_id = $1
+			)`,
+			`NOT EXISTS (
 				SELECT 1
 				FROM conversation_members bot_cm
 				JOIN conversations bot_conversation ON bot_conversation.id = bot_cm.conversation_id AND bot_conversation.type = 'direct'
@@ -839,14 +928,54 @@ func (r *PGRepository) Search(ctx context.Context, actorID, query, scope string,
 							SELECT 1 FROM jsonb_array_elements_text(CASE WHEN jsonb_typeof(bot_settings.access_policy->'direct'->'memberIds') = 'array' THEN bot_settings.access_policy->'direct'->'memberIds' ELSE '[]'::jsonb END) allowed(member_id) WHERE allowed.member_id = $1)))
 						OR bot_settings.access_policy->'direct'->>'audience' = 'space_members'
 					))
-			  )
-			  AND (
-				to_tsvector('simple', coalesce(m.plain_text, '')) @@ plainto_tsquery('simple', $3)
-				OR m.plain_text ILIKE $4
-			  )
-			ORDER BY m.created_at DESC
-			LIMIT $5
-		`, actorID, r.spaceID, query, likePattern, limit)
+			)`,
+		}
+		if conversationID != "" {
+			args = append(args, conversationID)
+			whereClauses = append(whereClauses, fmt.Sprintf("m.conversation_id = $%d", len(args)))
+		}
+		if senderID != "" {
+			args = append(args, senderID)
+			whereClauses = append(whereClauses, fmt.Sprintf("m.author_id = $%d", len(args)))
+		}
+		if query != "" {
+			args = append(args, query, likePattern)
+			qIdx := len(args) - 1
+			lIdx := len(args)
+			whereClauses = append(whereClauses, fmt.Sprintf(`(
+				to_tsvector('simple', coalesce(m.plain_text, '')) @@ plainto_tsquery('simple', $%d)
+				OR m.plain_text ILIKE $%d ESCAPE '\'
+			)`, qIdx, lIdx))
+		}
+		args = append(args, limit, offset)
+		limitIdx := len(args) - 1
+		offsetIdx := len(args)
+
+		msgSQL := fmt.Sprintf(`
+			SELECT
+				m.id,
+				m.conversation_id,
+				coalesce(m.thread_root_id, ''),
+				coalesce(m.author_id, ''),
+				coalesce(
+					NULLIF(ur.remark, ''),
+					NULLIF(u.nickname, ''),
+					NULLIF(u.display_name, ''),
+					NULLIF(u.github_login, ''),
+					''
+				) AS author_name,
+				m.plain_text,
+				m.created_at
+			FROM messages m
+			JOIN conversation_members cm ON cm.conversation_id = m.conversation_id AND cm.user_id = $1 AND cm.removed_at IS NULL
+			LEFT JOIN users u ON u.id = m.author_id
+			LEFT JOIN user_remarks ur ON ur.owner_user_id = $1 AND ur.target_user_id = m.author_id
+			WHERE %s
+			ORDER BY m.created_at DESC, m.id DESC
+			LIMIT $%d OFFSET $%d
+		`, strings.Join(whereClauses, "\n\t\t\t  AND "), limitIdx, offsetIdx)
+
+		rows, err := r.pool.Query(ctx, msgSQL, args...)
 		if err != nil {
 			return SearchResponse{}, err
 		}
@@ -864,102 +993,369 @@ func (r *PGRepository) Search(ctx context.Context, actorID, query, scope string,
 	}
 
 	if scope == "all" || scope == "files" {
-		rows, err := r.pool.Query(ctx, `
-			SELECT
-				a.id,
-				a.file_name,
-				a.mime_type,
-				a.byte_size,
-				coalesce(direct_src.conversation_id, linked_msg.conversation_id, a.conversation_id, ''),
-				coalesce(direct_src.id, linked_msg.message_id, ''),
-				a.width,
-				a.height,
-				coalesce(a.thumb_hash, ''),
-				a.created_at
-			FROM attachments a
-			LEFT JOIN messages direct_src
-				ON a.source_message_id IS NOT NULL
-				AND direct_src.id = a.source_message_id
-				AND direct_src.space_id = a.space_id
-				AND direct_src.topic_id IS NULL
-				AND direct_src.deleted_at IS NULL
-				AND direct_src.recalled_at IS NULL
-				AND EXISTS (
-					SELECT 1 FROM conversation_members dcm
-					WHERE dcm.conversation_id = direct_src.conversation_id
-					  AND dcm.user_id = $3
-					  AND dcm.removed_at IS NULL
-				)
-			LEFT JOIN LATERAL (
-				SELECT m.id AS message_id, m.conversation_id AS conversation_id
-				FROM message_attachments ma
-				INNER JOIN messages m ON m.id = ma.message_id
-				INNER JOIN conversation_members mcm
-					ON mcm.conversation_id = m.conversation_id
-					AND mcm.user_id = $3
-					AND mcm.removed_at IS NULL
-				WHERE ma.attachment_id = a.id
-				  AND m.space_id = a.space_id
-				  AND m.topic_id IS NULL
-				  AND m.deleted_at IS NULL
-				  AND m.recalled_at IS NULL
-				ORDER BY
-					CASE WHEN a.conversation_id IS NOT NULL AND m.conversation_id = a.conversation_id THEN 0 ELSE 1 END,
-					m.created_at DESC,
-					m.id DESC
-				LIMIT 1
-			) linked_msg ON TRUE
-			WHERE a.space_id = $1
-			  AND a.status = 'available'
-			  AND a.file_name ILIKE $2
-			  AND (
-				a.visibility = 'space'
-				OR a.uploader_id = $3
-				OR linked_msg.message_id IS NOT NULL
-				OR (a.conversation_id IS NOT NULL AND EXISTS (
-					SELECT 1 FROM conversation_members cm
-					WHERE cm.conversation_id = a.conversation_id AND cm.user_id = $3 AND cm.removed_at IS NULL
-				))
-			  )
-			  AND NOT EXISTS (
-				SELECT 1
-				FROM conversation_members bot_cm
-				JOIN conversations bot_conversation ON bot_conversation.id = bot_cm.conversation_id AND bot_conversation.type = 'direct'
-				JOIN workspace_agent_bots bot_access ON bot_access.space_id = a.space_id
-					AND bot_access.bot_user_id = bot_cm.user_id
-					AND bot_access.status <> 'deleted'
-				LEFT JOIN workspace_agent_bot_settings bot_settings ON bot_settings.bot_id = bot_access.id
-					AND bot_settings.space_id = a.space_id
-				WHERE bot_cm.conversation_id = COALESCE(direct_src.conversation_id, linked_msg.conversation_id, a.conversation_id)
-					AND bot_cm.user_id <> $3
-					AND bot_settings.access_policy IS NOT NULL
-					AND (bot_access.status <> 'active' OR COALESCE(bot_settings.allow_direct = 1, TRUE) = FALSE OR NOT (
-						(bot_settings.access_policy->'direct'->>'audience' = 'owner_only' AND bot_access.owner_user_id = $3)
-						OR (bot_settings.access_policy->'direct'->>'audience' = 'specified_members' AND (bot_access.owner_user_id = $3 OR EXISTS (
-							SELECT 1 FROM jsonb_array_elements_text(CASE WHEN jsonb_typeof(bot_settings.access_policy->'direct'->'memberIds') = 'array' THEN bot_settings.access_policy->'direct'->'memberIds' ELSE '[]'::jsonb END) allowed(member_id) WHERE allowed.member_id = $3)))
-						OR bot_settings.access_policy->'direct'->>'audience' = 'space_members'
-					))
-			  )
-			ORDER BY a.created_at DESC
-			LIMIT $4
-		`, r.spaceID, likePattern, actorID, limit)
-		if err != nil {
-			return SearchResponse{}, err
-		}
-		for rows.Next() {
-			var hit SearchFileHit
-			var createdAt time.Time
-			if err := rows.Scan(&hit.ID, &hit.FileName, &hit.MIMEType, &hit.ByteSize, &hit.ConversationID, &hit.SourceMessageID, &hit.Width, &hit.Height, &hit.ThumbHash, &createdAt); err != nil {
-				rows.Close()
+		if conversationID != "" {
+			mediaResp, err := r.searchConversationFiles(ctx, actorID, conversationID, query, likePattern, limit, offset)
+			if err != nil {
 				return SearchResponse{}, err
 			}
-			hit.CreatedAt = createdAt.UTC().Format(time.RFC3339Nano)
-			resp.Files = append(resp.Files, hit)
+			resp.Files = mediaResp
+		} else {
+			args := []any{r.spaceID, actorID}
+			nameClause := ""
+			if query != "" {
+				args = append(args, likePattern)
+				nameClause = fmt.Sprintf(`AND a.file_name ILIKE $%d ESCAPE '\'`, len(args))
+			}
+			args = append(args, limit, offset)
+			limitIdx := len(args) - 1
+			offsetIdx := len(args)
+
+			fileSQL := fmt.Sprintf(`
+				SELECT
+					a.id,
+					a.file_name,
+					a.mime_type,
+					a.byte_size,
+					coalesce(direct_src.conversation_id, linked_msg.conversation_id, a.conversation_id, ''),
+					coalesce(direct_src.id, linked_msg.message_id, ''),
+					a.width,
+					a.height,
+					coalesce(a.thumb_hash, ''),
+					a.created_at
+				FROM attachments a
+				LEFT JOIN messages direct_src
+					ON a.source_message_id IS NOT NULL
+					AND direct_src.id = a.source_message_id
+					AND direct_src.space_id = a.space_id
+					AND direct_src.topic_id IS NULL
+					AND direct_src.deleted_at IS NULL
+					AND direct_src.recalled_at IS NULL
+					AND NOT EXISTS (
+						SELECT 1 FROM message_hidden_states h
+						WHERE h.message_id = direct_src.id AND h.user_id = $2
+					)
+					AND EXISTS (
+						SELECT 1 FROM conversation_members dcm
+						WHERE dcm.conversation_id = direct_src.conversation_id
+						  AND dcm.user_id = $2
+						  AND dcm.removed_at IS NULL
+					)
+				LEFT JOIN LATERAL (
+					SELECT m.id AS message_id, m.conversation_id AS conversation_id
+					FROM message_attachments ma
+					INNER JOIN messages m ON m.id = ma.message_id
+					INNER JOIN conversation_members mcm
+						ON mcm.conversation_id = m.conversation_id
+						AND mcm.user_id = $2
+						AND mcm.removed_at IS NULL
+					WHERE ma.attachment_id = a.id
+					  AND m.space_id = a.space_id
+					  AND m.topic_id IS NULL
+					  AND m.deleted_at IS NULL
+					  AND m.recalled_at IS NULL
+					  AND NOT EXISTS (
+						SELECT 1 FROM message_hidden_states h
+						WHERE h.message_id = m.id AND h.user_id = $2
+					  )
+					ORDER BY
+						CASE WHEN a.conversation_id IS NOT NULL AND m.conversation_id = a.conversation_id THEN 0 ELSE 1 END,
+						m.created_at DESC,
+						m.id DESC
+					LIMIT 1
+				) linked_msg ON TRUE
+				WHERE a.space_id = $1
+				  AND a.status = 'available'
+				  %s
+				  AND (
+					a.visibility = 'space'
+					OR a.uploader_id = $2
+					OR direct_src.id IS NOT NULL
+					OR linked_msg.message_id IS NOT NULL
+					OR (a.conversation_id IS NOT NULL AND EXISTS (
+						SELECT 1 FROM conversation_members cm
+						WHERE cm.conversation_id = a.conversation_id AND cm.user_id = $2 AND cm.removed_at IS NULL
+					))
+				  )
+				  AND NOT EXISTS (
+					SELECT 1
+					FROM conversation_members bot_cm
+					JOIN conversations bot_conversation ON bot_conversation.id = bot_cm.conversation_id AND bot_conversation.type = 'direct'
+					JOIN workspace_agent_bots bot_access ON bot_access.space_id = a.space_id
+						AND bot_access.bot_user_id = bot_cm.user_id
+						AND bot_access.status <> 'deleted'
+					LEFT JOIN workspace_agent_bot_settings bot_settings ON bot_settings.bot_id = bot_access.id
+						AND bot_settings.space_id = a.space_id
+					WHERE bot_cm.conversation_id = COALESCE(direct_src.conversation_id, linked_msg.conversation_id, a.conversation_id)
+						AND bot_cm.user_id <> $2
+						AND bot_settings.access_policy IS NOT NULL
+						AND (bot_access.status <> 'active' OR COALESCE(bot_settings.allow_direct = 1, TRUE) = FALSE OR NOT (
+							(bot_settings.access_policy->'direct'->>'audience' = 'owner_only' AND bot_access.owner_user_id = $2)
+							OR (bot_settings.access_policy->'direct'->>'audience' = 'specified_members' AND (bot_access.owner_user_id = $2 OR EXISTS (
+								SELECT 1 FROM jsonb_array_elements_text(CASE WHEN jsonb_typeof(bot_settings.access_policy->'direct'->'memberIds') = 'array' THEN bot_settings.access_policy->'direct'->'memberIds' ELSE '[]'::jsonb END) allowed(member_id) WHERE allowed.member_id = $2)))
+							OR bot_settings.access_policy->'direct'->>'audience' = 'space_members'
+						))
+				  )
+				ORDER BY a.created_at DESC, a.id DESC
+				LIMIT $%d OFFSET $%d
+			`, nameClause, limitIdx, offsetIdx)
+
+			rows, err := r.pool.Query(ctx, fileSQL, args...)
+			if err != nil {
+				return SearchResponse{}, err
+			}
+			for rows.Next() {
+				var hit SearchFileHit
+				var createdAt time.Time
+				if err := rows.Scan(&hit.ID, &hit.FileName, &hit.MIMEType, &hit.ByteSize, &hit.ConversationID, &hit.SourceMessageID, &hit.Width, &hit.Height, &hit.ThumbHash, &createdAt); err != nil {
+					rows.Close()
+					return SearchResponse{}, err
+				}
+				hit.CreatedAt = createdAt.UTC().Format(time.RFC3339Nano)
+				resp.Files = append(resp.Files, hit)
+			}
+			rows.Close()
 		}
-		rows.Close()
 	}
 
 	return resp, nil
+}
+
+func (r *PGRepository) checkConversationAccessibleTx(ctx context.Context, tx pgx.Tx, actorID, conversationID string) error {
+	var allowed bool
+	err := tx.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM conversation_members cm
+			JOIN conversations c ON c.id = cm.conversation_id AND c.space_id = $1
+			WHERE cm.conversation_id = $2
+			  AND cm.user_id = $3
+			  AND cm.removed_at IS NULL
+			  AND NOT EXISTS (
+				SELECT 1
+				FROM conversation_members bot_cm
+				JOIN workspace_agent_bots bot_access ON bot_access.space_id = c.space_id
+					AND bot_access.bot_user_id = bot_cm.user_id
+					AND bot_access.status <> 'deleted'
+				LEFT JOIN workspace_agent_bot_settings bot_settings ON bot_settings.bot_id = bot_access.id
+					AND bot_settings.space_id = c.space_id
+				WHERE c.type = 'direct' AND bot_cm.conversation_id = c.id
+					AND bot_cm.user_id <> cm.user_id
+					AND bot_settings.access_policy IS NOT NULL
+					AND (
+						bot_access.status <> 'active'
+						OR COALESCE(bot_settings.allow_direct = 1, TRUE) = FALSE
+						OR NOT (
+							(bot_settings.access_policy->'direct'->>'audience' = 'owner_only' AND bot_access.owner_user_id = cm.user_id)
+							OR (bot_settings.access_policy->'direct'->>'audience' = 'specified_members'
+								AND (bot_access.owner_user_id = cm.user_id OR EXISTS (
+									SELECT 1 FROM jsonb_array_elements_text(CASE WHEN jsonb_typeof(bot_settings.access_policy->'direct'->'memberIds') = 'array' THEN bot_settings.access_policy->'direct'->'memberIds' ELSE '[]'::jsonb END) allowed(member_id)
+									WHERE allowed.member_id = cm.user_id)))
+							OR bot_settings.access_policy->'direct'->>'audience' = 'space_members'
+						)
+					)
+			  )
+		)
+	`, r.spaceID, conversationID, actorID).Scan(&allowed)
+	if err != nil {
+		return err
+	}
+	if !allowed {
+		return ErrForbidden
+	}
+	return nil
+}
+
+func (r *PGRepository) searchConversationFiles(ctx context.Context, actorID, conversationID, query, likePattern string, limit, offset int) ([]SearchFileHit, error) {
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{
+		IsoLevel:   pgx.RepeatableRead,
+		AccessMode: pgx.ReadOnly,
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if err := r.checkConversationAccessibleTx(ctx, tx, actorID, conversationID); err != nil {
+		if errors.Is(err, ErrForbidden) {
+			return []SearchFileHit{}, nil
+		}
+		return nil, err
+	}
+
+	args := []any{r.spaceID, conversationID, actorID}
+	nameClause := ""
+	if query != "" {
+		args = append(args, likePattern)
+		nameClause = fmt.Sprintf(`AND a.file_name ILIKE $%d ESCAPE '\'`, len(args))
+	}
+	args = append(args, limit, offset)
+	limitIdx := len(args) - 1
+	offsetIdx := len(args)
+
+	rows, err := tx.Query(ctx, fmt.Sprintf(`
+		SELECT
+			a.id,
+			a.file_name,
+			a.mime_type,
+			a.byte_size,
+			$2::text AS conversation_id,
+			ref.id AS source_message_id,
+			a.width,
+			a.height,
+			coalesce(a.thumb_hash, ''),
+			ref.created_at
+		FROM attachments a
+		JOIN LATERAL (
+			SELECT m.id, m.created_at
+			FROM messages m
+			WHERE m.space_id = $1
+			  AND m.conversation_id = $2
+			  AND m.deleted_at IS NULL
+			  AND m.recalled_at IS NULL
+			  AND m.topic_id IS NULL
+			  AND NOT EXISTS (
+				SELECT 1 FROM message_hidden_states h
+				WHERE h.message_id = m.id AND h.user_id = $3
+			  )
+			  AND (
+				m.id = a.source_message_id
+				OR EXISTS (
+					SELECT 1 FROM message_attachments ma
+					WHERE ma.message_id = m.id AND ma.attachment_id = a.id
+				)
+			  )
+			ORDER BY m.created_at DESC, m.id DESC
+			LIMIT 1
+		) ref ON TRUE
+		WHERE a.space_id = $1
+		  AND a.status = 'available'
+		  %s
+		ORDER BY ref.created_at DESC, a.created_at DESC, a.id DESC
+		LIMIT $%d OFFSET $%d
+	`, nameClause, limitIdx, offsetIdx), args...)
+	if err != nil {
+		return nil, err
+	}
+	items := []SearchFileHit{}
+	for rows.Next() {
+		var hit SearchFileHit
+		var createdAt time.Time
+		if err := rows.Scan(&hit.ID, &hit.FileName, &hit.MIMEType, &hit.ByteSize, &hit.ConversationID, &hit.SourceMessageID, &hit.Width, &hit.Height, &hit.ThumbHash, &createdAt); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		hit.CreatedAt = createdAt.UTC().Format(time.RFC3339Nano)
+		items = append(items, hit)
+	}
+	rows.Close()
+	return items, rows.Err()
+}
+
+func (r *PGRepository) ListConversationMedia(ctx context.Context, actorID, conversationID, kind string, limit, offset int) (ConversationMediaResponse, error) {
+	switch kind {
+	case "", "all":
+		kind = "all"
+	case "image", "file":
+	default:
+		return ConversationMediaResponse{}, fmt.Errorf("%w: invalid media kind", ErrInvalidInput)
+	}
+	if limit <= 0 {
+		limit = 30
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	if offset < 0 {
+		return ConversationMediaResponse{}, fmt.Errorf("%w: offset 不能为负数", ErrInvalidInput)
+	}
+
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{
+		IsoLevel:   pgx.RepeatableRead,
+		AccessMode: pgx.ReadOnly,
+	})
+	if err != nil {
+		return ConversationMediaResponse{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if err := r.checkConversationAccessibleTx(ctx, tx, actorID, conversationID); err != nil {
+		return ConversationMediaResponse{}, err
+	}
+
+	rows, err := tx.Query(ctx, `
+		SELECT
+			a.id,
+			a.file_name,
+			a.mime_type,
+			a.byte_size,
+			$2::text AS conversation_id,
+			ref.id AS source_message_id,
+			a.width,
+			a.height,
+			coalesce(a.thumb_hash, ''),
+			ref.created_at
+		FROM attachments a
+		JOIN LATERAL (
+			SELECT m.id, m.created_at
+			FROM messages m
+			WHERE m.space_id = $1
+			  AND m.conversation_id = $2
+			  AND m.deleted_at IS NULL
+			  AND m.recalled_at IS NULL
+			  AND m.topic_id IS NULL
+			  AND NOT EXISTS (
+				SELECT 1 FROM message_hidden_states h
+				WHERE h.message_id = m.id AND h.user_id = $3
+			  )
+			  AND (
+				m.id = a.source_message_id
+				OR EXISTS (
+					SELECT 1 FROM message_attachments ma
+					WHERE ma.message_id = m.id AND ma.attachment_id = a.id
+				)
+			  )
+			ORDER BY m.created_at DESC, m.id DESC
+			LIMIT 1
+		) ref ON TRUE
+		WHERE a.space_id = $1
+		  AND a.status = 'available'
+		  AND (
+			$4 = 'all'
+			OR ($4 = 'image' AND a.mime_type LIKE 'image/%')
+			OR ($4 = 'file' AND a.mime_type NOT LIKE 'image/%')
+		  )
+		ORDER BY ref.created_at DESC, a.created_at DESC, a.id DESC
+		LIMIT $5 OFFSET $6
+	`, r.spaceID, conversationID, actorID, kind, limit+1, offset)
+	if err != nil {
+		return ConversationMediaResponse{}, err
+	}
+
+	items := make([]SearchFileHit, 0, limit)
+	hasMore := false
+	for rows.Next() {
+		var hit SearchFileHit
+		var createdAt time.Time
+		if err := rows.Scan(&hit.ID, &hit.FileName, &hit.MIMEType, &hit.ByteSize, &hit.ConversationID, &hit.SourceMessageID, &hit.Width, &hit.Height, &hit.ThumbHash, &createdAt); err != nil {
+			rows.Close()
+			return ConversationMediaResponse{}, err
+		}
+		if len(items) == limit {
+			hasMore = true
+			continue
+		}
+		hit.CreatedAt = createdAt.UTC().Format(time.RFC3339Nano)
+		items = append(items, hit)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return ConversationMediaResponse{}, err
+	}
+	rows.Close()
+	return ConversationMediaResponse{
+		Items:   items,
+		HasMore: hasMore,
+	}, nil
 }
 
 func (r *PGRepository) GetOrCreateSavedConversation(ctx context.Context, actorID string, now time.Time) (string, error) {
@@ -1849,7 +2245,7 @@ func (r *PGRepository) AddGroupMembers(ctx context.Context, actorID, conversatio
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO conversation_members (conversation_id, user_id, role, joined_at, removed_at)
 			VALUES ($1, $2, 'member', $3, NULL)
-			ON CONFLICT (conversation_id, user_id) DO UPDATE SET removed_at = NULL, joined_at = EXCLUDED.joined_at
+			ON CONFLICT (conversation_id, user_id) DO UPDATE SET role = 'member', removed_at = NULL, joined_at = EXCLUDED.joined_at
 		`, conversationID, member.ID, now.UTC()); err != nil {
 			return GroupConversationSummary{}, err
 		}
@@ -1909,10 +2305,9 @@ func (r *PGRepository) LeaveGroupConversation(ctx context.Context, actorID, conv
 	err = tx.QueryRow(ctx, `
 		SELECT c.type
 		FROM conversations c
-		JOIN conversation_members cm ON cm.conversation_id = c.id AND cm.user_id = $3 AND cm.removed_at IS NULL
 		WHERE c.space_id = $1 AND c.id = $2
 		FOR UPDATE OF c
-	`, r.spaceID, conversationID, actorID).Scan(&convType)
+	`, r.spaceID, conversationID).Scan(&convType)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrNotFound
@@ -1923,9 +2318,22 @@ func (r *PGRepository) LeaveGroupConversation(ctx context.Context, actorID, conv
 		return fmt.Errorf("%w: 仅群聊支持退出操作", ErrInvalidInput)
 	}
 
+	var actorGroupRole string
+	err = tx.QueryRow(ctx, `
+		SELECT coalesce(role, 'member')
+		FROM conversation_members
+		WHERE conversation_id = $1 AND user_id = $2 AND removed_at IS NULL
+	`, conversationID, actorID).Scan(&actorGroupRole)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		return err
+	}
+
 	tag, err := tx.Exec(ctx, `
 		UPDATE conversation_members
-		SET removed_at = $1
+		SET removed_at = $1, role = 'member'
 		WHERE conversation_id = $2 AND user_id = $3 AND removed_at IS NULL
 	`, now.UTC(), conversationID, actorID)
 	if err != nil {
@@ -1933,6 +2341,43 @@ func (r *PGRepository) LeaveGroupConversation(ctx context.Context, actorID, conv
 	}
 	if tag.RowsAffected() == 0 {
 		return ErrNotFound
+	}
+
+	var promotedUserID, promotedName string
+	if actorGroupRole == "owner" {
+		var remainingOwners int
+		if err := tx.QueryRow(ctx, `
+			SELECT COUNT(*)
+			FROM conversation_members cm
+			JOIN users u ON u.id = cm.user_id AND u.kind = 'human'
+			WHERE cm.conversation_id = $1 AND cm.removed_at IS NULL AND cm.role = 'owner'
+		`, conversationID).Scan(&remainingOwners); err != nil {
+			return err
+		}
+		if remainingOwners == 0 {
+			err := tx.QueryRow(ctx, `
+				SELECT
+					cm.user_id,
+					coalesce(nullif(u.nickname, ''), nullif(u.display_name, ''), nullif(u.github_login, ''), '成员')
+				FROM conversation_members cm
+				JOIN users u ON u.id = cm.user_id AND u.kind = 'human'
+				WHERE cm.conversation_id = $1 AND cm.removed_at IS NULL
+				ORDER BY CASE WHEN cm.role = 'admin' THEN 0 ELSE 1 END, cm.joined_at ASC, cm.user_id ASC
+				LIMIT 1
+			`, conversationID).Scan(&promotedUserID, &promotedName)
+			if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+				return err
+			}
+			if promotedUserID != "" {
+				if _, err := tx.Exec(ctx, `
+					UPDATE conversation_members
+					SET role = 'owner'
+					WHERE conversation_id = $1 AND user_id = $2 AND removed_at IS NULL
+				`, conversationID, promotedUserID); err != nil {
+					return err
+				}
+			}
+		}
 	}
 
 	if err := emitWorkspaceEventTx(ctx, tx, r.spaceID, actorID, conversationID, "conversation.member_removed", "user", actorID, map[string]any{
@@ -1944,6 +2389,11 @@ func (r *PGRepository) LeaveGroupConversation(ctx context.Context, actorID, conv
 	}
 	if err := insertGroupSystemMessageTx(ctx, tx, r.spaceID, actorID, conversationID, fmt.Sprintf("%s 离开了群聊", actorName), now); err != nil {
 		return err
+	}
+	if promotedUserID != "" {
+		if err := insertGroupSystemMessageTx(ctx, tx, r.spaceID, actorID, conversationID, fmt.Sprintf("%s 已自动成为新群主", promotedName), now); err != nil {
+			return err
+		}
 	}
 
 	return tx.Commit(ctx)
@@ -2040,14 +2490,17 @@ func (r *PGRepository) RemoveGroupMember(ctx context.Context, actorID, conversat
 		return GroupConversationSummary{}, err
 	}
 
-	var convType, createdBy string
+	if targetUserID == actorID {
+		return GroupConversationSummary{}, fmt.Errorf("%w: 请使用退出群聊操作离开当前群聊", ErrInvalidInput)
+	}
+
+	var convType string
 	err = tx.QueryRow(ctx, `
-		SELECT c.type, coalesce(c.created_by, '')
+		SELECT c.type
 		FROM conversations c
-		JOIN conversation_members cm ON cm.conversation_id = c.id AND cm.user_id = $3 AND cm.removed_at IS NULL
 		WHERE c.space_id = $1 AND c.id = $2
 		FOR UPDATE OF c
-	`, r.spaceID, conversationID, actorID).Scan(&convType, &createdBy)
+	`, r.spaceID, conversationID).Scan(&convType)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return GroupConversationSummary{}, ErrForbidden
@@ -2058,13 +2511,26 @@ func (r *PGRepository) RemoveGroupMember(ctx context.Context, actorID, conversat
 		return GroupConversationSummary{}, fmt.Errorf("%w: 仅群聊支持移除成员", ErrInvalidInput)
 	}
 
-	var targetKind, targetName string
+	var actorGroupRole string
 	err = tx.QueryRow(ctx, `
-		SELECT u.kind, coalesce(nullif(u.nickname, ''), nullif(u.display_name, ''), nullif(u.github_login, ''), '成员')
+		SELECT coalesce(role, 'member')
+		FROM conversation_members
+		WHERE conversation_id = $1 AND user_id = $2 AND removed_at IS NULL
+	`, conversationID, actorID).Scan(&actorGroupRole)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return GroupConversationSummary{}, ErrForbidden
+		}
+		return GroupConversationSummary{}, err
+	}
+
+	var targetKind, targetName, targetGroupRole string
+	err = tx.QueryRow(ctx, `
+		SELECT u.kind, coalesce(nullif(u.nickname, ''), nullif(u.display_name, ''), nullif(u.github_login, ''), '成员'), coalesce(cm.role, 'member')
 		FROM conversation_members cm
 		JOIN users u ON u.id = cm.user_id
 		WHERE cm.conversation_id = $1 AND cm.user_id = $2 AND cm.removed_at IS NULL
-	`, conversationID, targetUserID).Scan(&targetKind, &targetName)
+	`, conversationID, targetUserID).Scan(&targetKind, &targetName, &targetGroupRole)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return GroupConversationSummary{}, ErrNotFound
@@ -2072,7 +2538,12 @@ func (r *PGRepository) RemoveGroupMember(ctx context.Context, actorID, conversat
 		return GroupConversationSummary{}, err
 	}
 
-	if targetKind != "bot" && actorRole != "owner" && actorRole != "admin" && createdBy != actorID {
+	if targetGroupRole == "owner" {
+		return GroupConversationSummary{}, ErrForbidden
+	}
+
+	canManage := actorRole == "owner" || actorRole == "admin" || actorGroupRole == "owner" || actorGroupRole == "admin"
+	if targetKind != "bot" && !canManage {
 		return GroupConversationSummary{}, ErrForbidden
 	}
 
@@ -2491,9 +2962,18 @@ func (r *PGRepository) PinMessage(ctx context.Context, actorID, conversationID, 
 	if err := tx.QueryRow(ctx, `
 		SELECT EXISTS (
 			SELECT 1 FROM messages
-			WHERE id = $1 AND conversation_id = $2 AND space_id = $3 AND deleted_at IS NULL
+			WHERE id = $1
+			  AND conversation_id = $2
+			  AND space_id = $3
+			  AND deleted_at IS NULL
+			  AND recalled_at IS NULL
+			  AND topic_id IS NULL
+			  AND NOT EXISTS (
+				SELECT 1 FROM message_hidden_states h
+				WHERE h.message_id = messages.id AND h.user_id = $4
+			  )
 		)
-	`, messageID, conversationID, r.spaceID).Scan(&msgExists); err != nil {
+	`, messageID, conversationID, r.spaceID, actorID).Scan(&msgExists); err != nil {
 		return err
 	}
 	if !msgExists {

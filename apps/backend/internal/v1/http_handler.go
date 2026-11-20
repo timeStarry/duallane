@@ -141,6 +141,7 @@ func (h *HTTPHandler) Mount(r chi.Router) {
 			r.Patch("/messages/{messageId}", h.handleEditMessage)
 			r.Post("/messages/forward", h.handleForwardMessages)
 			r.Get("/conversations/{conversationId}/threads", h.handleListConversationThreads)
+			r.Get("/conversations/{conversationId}/media", h.handleListConversationMedia)
 			r.Get("/conversations/{conversationId}/bot-requests", h.handleGroupBotRequests)
 			r.Get("/messages/{messageId}/thread", h.handleGetThread)
 			r.Post("/messages/{messageId}/thread", h.handleReplyThread)
@@ -226,9 +227,37 @@ func (h *HTTPHandler) handleSync(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *HTTPHandler) handleSearch(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query().Get("q")
-	scope := r.URL.Query().Get("scope")
-	res, err := h.service.Search(r.Context(), actorFromContext(r.Context()).ID, q, scope)
+	query := r.URL.Query()
+	limit, _ := strconv.Atoi(query.Get("limit"))
+	offset, _ := strconv.Atoi(query.Get("offset"))
+	res, err := h.service.SearchWithOptions(r.Context(), actorFromContext(r.Context()).ID, SearchOptions{
+		Query:          query.Get("q"),
+		Scope:          query.Get("scope"),
+		ConversationID: query.Get("conversationId"),
+		SenderID:       query.Get("senderId"),
+		Limit:          limit,
+		Offset:         offset,
+	})
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+func (h *HTTPHandler) handleListConversationMedia(w http.ResponseWriter, r *http.Request) {
+	convID := chi.URLParam(r, "conversationId")
+	query := r.URL.Query()
+	limit, _ := strconv.Atoi(query.Get("limit"))
+	offset, _ := strconv.Atoi(query.Get("offset"))
+	res, err := h.service.ListConversationMedia(
+		r.Context(),
+		actorFromContext(r.Context()).ID,
+		convID,
+		strings.TrimSpace(query.Get("kind")),
+		limit,
+		offset,
+	)
 	if err != nil {
 		writeServiceError(w, err)
 		return
