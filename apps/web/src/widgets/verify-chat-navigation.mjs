@@ -119,6 +119,7 @@ try {
     await expect(banner).toHaveCount(0);
     if (await bottomButton.isVisible()) await bottomButton.click();
     await expect.poll(bottomDistance).toBeLessThan(3);
+    await expect.poll(() => page.evaluate(() => window.chatFixture.ws.getState().conversations["chat-a"].unreadCount)).toBe(0);
     // Re-entry through lane controls also acknowledges unread exactly once.
     await page.evaluate(() => { const f = window.chatFixture; f.lane.getState().setActiveLane("p2p"); });
     await page.evaluate(() => { const f = window.chatFixture; f.append("lane-new-1"); f.append("lane-new-2"); });
