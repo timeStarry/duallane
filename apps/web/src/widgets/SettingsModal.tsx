@@ -837,7 +837,7 @@ export function SettingsModal() {
                           <span>登录邮箱</span>
                         </div>
                         <div className="text-xs text-dl-text-tertiary">
-                          绑定后可使用邮箱验证码快捷登录双端（GitHub 仍为主账号凭证）
+                          绑定地址优先用于验证码登录，未绑定时可使用通过 GitHub 登录同步的已验证主邮箱。
                         </div>
                       </div>
                       {boundEmail && !editingBoundEmail && (
