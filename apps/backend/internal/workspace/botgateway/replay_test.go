@@ -54,6 +54,28 @@ func TestReplayDrainsPreviouslyQueuedDeliveryWhenDiscoveryIsSaturated(t *testing
 	}
 }
 
+func TestReplayMemberLimitDoesNotBlockAnotherRequestor(t *testing.T) {
+	repo, service, authValue, _, _ := gatewayFixture(t)
+	repo.limits.MemberDailyRequests = 1
+	previous := addReplayTestTrigger(repo, 1)
+	repo.deliveries = []DeliveryRecord{{
+		ID: "previous_delivery", BotID: authValue.BotID, SpaceID: authValue.SpaceID, EventID: previous.ID,
+		Sequence: previous.Sequence, Status: "acked", CreatedAt: repo.now(), ExpiresAt: repo.now().Add(ReplayWindow),
+	}}
+	addReplayTestTrigger(repo, 2)
+	other := addReplayTestTrigger(repo, 3)
+	other.ActorUserID = "second_sender"
+	repo.events[2] = other
+	repo.members["conv_direct:second_sender"] = true
+	repo.senders["conv_direct:second_sender"] = &Sender{ID: other.ActorUserID, Kind: "human", Role: "member"}
+	repo.triggers[other.ConversationID+":"+other.TargetID].AuthorID = other.ActorUserID
+
+	page, err := service.Replay(context.Background(), authValue, ReplayInput{LastSequence: previous.Sequence})
+	if err != nil || len(page.Events) != 1 || page.Events[0].EventID != other.ID || page.HasMore {
+		t.Fatalf("member's rate limit stalled another requestor: %#v, %v", page, err)
+	}
+}
+
 func TestReplayEmptyPageOfRevokedRowsStillContinues(t *testing.T) {
 	repo, service, authValue, _, _ := gatewayFixture(t)
 	for sequence := int64(1); sequence <= 5; sequence++ {

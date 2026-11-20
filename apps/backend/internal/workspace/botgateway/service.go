@@ -1544,8 +1544,8 @@ func (s *Service) queueWorkspaceEvents(ctx context.Context, current *Auth, scan 
 	return scan.Through, false, nil
 }
 
-// A quota rejection defers discovery so the next page can retry when capacity
-// becomes available. An event outside current authorization is settled.
+// Bot-wide capacity defers discovery until the Bot can admit more work.
+// A refusal scoped to the source event leaves the rest of the scan eligible.
 func (s *Service) queueValidatedEvent(ctx context.Context, current *Auth, event EventRecord) (settled bool, err error) {
 	authorized, message, err := s.authorizeValidatedDelivery(ctx, current, event)
 	if err != nil || !authorized {
@@ -1561,8 +1561,9 @@ func (s *Service) queueValidatedEvent(ctx context.Context, current *Auth, event 
 		if err := tx.Lock(ctx, "workspace-bot-delivery:"+current.BotID); err != nil {
 			return err
 		}
-		allowed, err := s.passesDeliveryRateLimits(ctx, tx, current, event)
+		allowed, deferScan, err := s.checkDeliveryLimits(ctx, tx, current, event)
 		if err != nil || !allowed {
+			settled = !deferScan
 			return err
 		}
 		_, err = tx.InsertDelivery(ctx, input)
@@ -1870,34 +1871,37 @@ func truncateUTF8Bytes(value string, maxBytes int) string {
 	return value[:cut]
 }
 
-func (s *Service) passesDeliveryRateLimits(ctx context.Context, repo ReadRepository, value *Auth, event EventRecord) (bool, error) {
+func (s *Service) checkDeliveryLimits(ctx context.Context, repo ReadRepository, value *Auth, event EventRecord) (allowed, deferScan bool, err error) {
 	limits, err := repo.GetLimits(ctx, value.BotID, value.SpaceID)
 	if err != nil {
-		return false, normalizeError(err)
+		return false, false, normalizeError(err)
 	}
 	if limits == nil {
-		return false, nil
+		return false, false, nil
 	}
 	now := s.nowUTC()
 	recent, err := repo.CountRecentDeliveries(ctx, value.BotID, value.SpaceID, now.Add(-time.Minute))
 	if err != nil {
-		return false, normalizeError(err)
+		return false, false, normalizeError(err)
 	}
 	if limits.RequestsPerMinute > 0 && recent >= limits.RequestsPerMinute {
-		return false, nil
+		return false, true, nil
 	}
 	memberDaily, err := repo.CountMemberDeliveries(ctx, value.BotID, value.SpaceID, event.ActorUserID, now.Add(-24*time.Hour))
 	if err != nil {
-		return false, normalizeError(err)
+		return false, false, normalizeError(err)
 	}
 	if limits.MemberDailyRequests > 0 && memberDaily >= limits.MemberDailyRequests {
-		return false, nil
+		return false, false, nil
 	}
 	backlog, err := repo.CountPendingDeliveries(ctx, value.BotID, value.SpaceID, now)
 	if err != nil {
-		return false, normalizeError(err)
+		return false, false, normalizeError(err)
 	}
-	return limits.EventBacklogLimit <= 0 || backlog < limits.EventBacklogLimit, nil
+	if limits.EventBacklogLimit > 0 && backlog >= limits.EventBacklogLimit {
+		return false, true, nil
+	}
+	return true, false, nil
 }
 
 func (s *Service) recordCardRejection(ctx context.Context, value *Auth, meta auth.RequestMeta, action, targetID string, cause error) error {

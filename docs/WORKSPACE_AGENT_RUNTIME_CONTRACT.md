@@ -110,12 +110,13 @@ paths, tokens or source URLs. Transport health and business health are separate.
 
 The gateway captures the committed space sequence before each bounded scan.
 Discovery pages over potential Bot events after the supplied checkpoint. A new
-delivery is eligible within the replay window measured from its source event. Previously
-queued deliveries keep their recorded expiry. Replay checks the Bot's current
-scope, the sender and conversation, and the current trigger before delivery.
+delivery is eligible within the replay window measured from its source event.
+Previously queued deliveries keep their recorded expiry. Replay checks the
+Bot's current scope, sender, conversation and trigger before delivery.
 Unrelated space traffic and settled expiry or revocation never suppress live
-pending records. Admission limits can defer new discoveries while existing
-queued work drains. Retries reuse the same Bot delivery and event identity.
+pending records. Bot-wide capacity can defer new discoveries while existing
+queued work drains. Per-member limits apply to that member's events.
+Retries reuse the same Bot delivery and event identity.
 An ACK for the same Bot and event is idempotent.
 
 For HTTP `/api/bot/v2/updates`, `currentSequence` reports the captured space
