@@ -13,6 +13,21 @@ export type DualLaneRelease = {
 
 export const DUAL_LANE_RELEASES: DualLaneRelease[] = [
   {
+    version: "1.2.6",
+    releasedAt: "2026-11-20",
+    title: "修复助手漏收群聊消息",
+    summary: "当共享空间消息较多时，助手重连后仍能继续接收有效的待处理消息。",
+    categories: [
+      {
+        title: "助手消息",
+        items: [
+          "助手断线重连后继续接收授权范围内、仍有效的群聊和私聊消息",
+          "助手运行包需升级到 SDK 1.2.2，使用原有配对继续接收消息"
+        ]
+      }
+    ]
+  },
+  {
     version: "1.2.5",
     releasedAt: "2026-11-20",
     title: "支持使用已验证 GitHub 邮箱默认登录",
