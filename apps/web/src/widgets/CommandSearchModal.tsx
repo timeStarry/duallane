@@ -388,9 +388,9 @@ export function CommandSearchModal() {
               placeholder={
                 scopedConv
                   ? `在「${scopedConv.title}」中搜索消息或文件…`
-                  : "搜索联系人、群聊、消息或文件名…"
+                  : "输入关键词、文件名或指令…"
               }
-              aria-label="搜索关键词"
+              aria-label="全局搜索关键词"
             />
 
             {/* Scope tabs + In-chat scope toggle */}
