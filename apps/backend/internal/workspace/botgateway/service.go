@@ -1351,11 +1351,11 @@ func (s *Service) Acknowledge(ctx context.Context, value *Auth, input Acknowledg
 	if eventID == "" && sequence == 0 {
 		return AcknowledgeResult{}, NewError(CodeInvalidAck, MessageInvalidAck, 400)
 	}
-	var acknowledged bool
+	var acknowledged, changed bool
 	now := s.nowUTC()
 	err = s.repo.WithTx(ctx, func(tx Tx) error {
-		acknowledged, err = tx.AcknowledgeDelivery(ctx, current.BotID, current.SpaceID, eventID, sequence, now)
-		if err != nil {
+		acknowledged, changed, err = tx.AcknowledgeDelivery(ctx, current.BotID, current.SpaceID, eventID, sequence, now)
+		if err != nil || !changed {
 			return err
 		}
 		return tx.MarkProcessed(ctx, current.BotID, current.SpaceID, now)
@@ -1363,7 +1363,7 @@ func (s *Service) Acknowledge(ctx context.Context, value *Auth, input Acknowledg
 	if err != nil {
 		return AcknowledgeResult{}, normalizeError(err)
 	}
-	if acknowledged {
+	if changed {
 		if recorder, ok := s.repo.(BotPresenceRecorder); ok {
 			_ = recorder.RecordBotAckRead(ctx, current.BotID, current.SpaceID, current.UserID, eventID, sequence, now)
 		}
@@ -1398,12 +1398,8 @@ func (s *Service) Replay(ctx context.Context, value *Auth, input ReplayInput) (R
 	if limit > MaxReplayLimit {
 		limit = MaxReplayLimit
 	}
-	if err := s.expireDeliveries(ctx, current); err != nil {
-		return ReplayResult{}, err
-	}
-	if err := s.queueWorkspaceEvents(ctx, current); err != nil {
-		return ReplayResult{}, err
-	}
+	// Capture the committed head before discovery. Events committed during this
+	// page stay above its resume position and belong to the next page.
 	workspaceSequence, err := s.repo.CurrentSequence(ctx, current.SpaceID)
 	if err != nil {
 		return ReplayResult{}, normalizeError(err)
@@ -1414,77 +1410,104 @@ func (s *Service) Replay(ctx context.Context, value *Auth, input ReplayInput) (R
 		result.Reason = "cursor_ahead"
 		return result, nil
 	}
-	candidates, err := s.repo.ListDeliveriesAfter(ctx, current.BotID, current.SpaceID, cursor, s.nowUTC(), limit*4+1)
-	if err != nil {
-		return ReplayResult{}, normalizeError(err)
-	}
-	allowed := make([]DeliveryRecord, 0, len(candidates))
-	for _, candidate := range candidates {
-		event, getErr := s.repo.GetEvent(ctx, current.SpaceID, candidate.EventID)
-		if getErr != nil {
-			return ReplayResult{}, normalizeError(getErr)
-		}
-		visible := false
-		var message *MessageTrigger
-		if event != nil {
-			visible, message, getErr = s.authorizeDelivery(ctx, current, *event)
-		}
-		if getErr != nil {
-			return ReplayResult{}, getErr
-		}
-		if !visible {
-			if expireErr := s.repo.WithTx(ctx, func(tx Tx) error { return tx.ExpireDelivery(ctx, candidate.ID) }); expireErr != nil {
-				return ReplayResult{}, normalizeError(expireErr)
-			}
-			continue
-		}
-		// Rebuild from current authorized data, including deliveries queued before
-		// trigger text was projected. A stored event payload is not message authority.
-		candidate.PayloadJSON = authorizedDeliveryPayload(*event, message)
-		allowed = append(allowed, candidate)
-	}
-	earliestWorkspace, err := s.repo.EarliestSequence(ctx, current.SpaceID)
-	if err != nil {
-		return ReplayResult{}, normalizeError(err)
-	}
-	scanFloor := earliestWorkspace
-	if windowFloor := workspaceSequence - int64(s.replayLimit*4) + 1; windowFloor > scanFloor {
-		scanFloor = windowFloor
-	}
-	earliestDelivery, err := s.repo.EarliestDeliverySequence(ctx, current.BotID, current.SpaceID, s.nowUTC())
-	if err != nil {
-		return ReplayResult{}, normalizeError(err)
-	}
-	if earliestDelivery > 0 && earliestDelivery < scanFloor {
-		scanFloor = earliestDelivery
-	}
-	expiredAfter, err := s.hasExpiredAfter(ctx, current, cursor)
-	if err != nil {
+	result.ResumeSequence = cursor
+	if err := s.expireDeliveries(ctx, current); err != nil {
 		return ReplayResult{}, err
 	}
-	if expiredAfter || (scanFloor > 0 && cursor < scanFloor-1) {
-		result.SyncRequired = true
-		result.Reason = "replay_window_exceeded"
+	if cursor == workspaceSequence {
 		return result, nil
 	}
-	result.HasMore = len(allowed) > limit
-	if len(allowed) > limit {
-		allowed = allowed[:limit]
+	scan := ReplayRange{After: cursor, Through: workspaceSequence}
+	scannedThrough, deferred, scanErr := s.queueWorkspaceEvents(ctx, current, scan)
+	if scanErr != nil && (!deferred || ctx.Err() != nil || isInvalidToken(scanErr)) {
+		return ReplayResult{}, scanErr
 	}
-	for index := range allowed {
-		if err := s.repo.WithTx(ctx, func(tx Tx) error {
-			return tx.MarkDeliveryDelivered(ctx, allowed[index].ID, s.nowUTC())
-		}); err != nil {
+	// Page the durable queue independently of the number of unrelated space
+	// events. Lookahead signals more work even if the whole page is revoked.
+	budget := limit * 4
+	candidates, err := s.repo.ListPendingDeliveries(ctx, current.BotID, current.SpaceID, scan, s.nowUTC(), budget+1)
+	if err != nil {
+		return ReplayResult{}, normalizeError(err)
+	}
+	for index, candidate := range candidates {
+		if index == budget || len(result.Events) == limit {
+			result.HasMore = true
+			return result, nil
+		}
+		// Incomplete discovery still permits already queued work to drain
+		// if a quota or source error would otherwise block it.
+		pastScan := candidate.Sequence > scannedThrough
+		if pastScan && (!deferred || len(result.Events) != 0) {
+			break
+		}
+		delivery, err := s.replayDelivery(ctx, current, candidate)
+		if err != nil {
+			return ReplayResult{}, err
+		}
+		if delivery != nil {
+			result.Events = append(result.Events, *delivery)
+			if pastScan {
+				result.ResumeSequence = candidate.Sequence
+				result.HasMore = candidate.Sequence < workspaceSequence
+				return result, nil
+			}
+		}
+		if !pastScan {
+			result.ResumeSequence = candidate.Sequence
+		}
+	}
+	result.ResumeSequence = scannedThrough
+	result.HasMore = scannedThrough < workspaceSequence
+	if scanErr != nil && result.ResumeSequence == cursor && len(result.Events) == 0 {
+		return ReplayResult{}, scanErr
+	}
+	if !result.HasMore && len(result.Events) == 0 {
+		result.SyncRequired, err = s.hasExpiredDeliveries(ctx, current, scan)
+		if err != nil {
 			return ReplayResult{}, normalizeError(err)
 		}
-		allowed[index].Status = "delivered"
-		allowed[index].Attempts++
-	}
-	result.Events = make([]Delivery, 0, len(allowed))
-	for _, row := range allowed {
-		result.Events = append(result.Events, projectDelivery(row))
+		if result.SyncRequired {
+			result.Reason = "replay_window_exceeded"
+		}
 	}
 	return result, nil
+}
+
+func (s *Service) replayDelivery(ctx context.Context, current *Auth, candidate DeliveryRecord) (*Delivery, error) {
+	event, err := s.repo.GetEvent(ctx, current.SpaceID, candidate.EventID)
+	if err != nil {
+		return nil, normalizeError(err)
+	}
+	var visible bool
+	var message *MessageTrigger
+	if event != nil {
+		visible, message, err = s.authorizeDelivery(ctx, current, *event)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if !visible {
+		err := s.repo.WithTx(ctx, func(tx Tx) error { return tx.ExpireDelivery(ctx, candidate.ID) })
+		if err != nil {
+			return nil, normalizeError(err)
+		}
+		return nil, nil
+	}
+	err = s.repo.WithTx(ctx, func(tx Tx) error {
+		candidate.Attempts, err = tx.MarkDeliveryDelivered(ctx, candidate.ID, s.nowUTC())
+		return err
+	})
+	if err != nil {
+		return nil, normalizeError(err)
+	}
+	if candidate.Attempts == 0 {
+		return nil, nil // An ACK or expiry settled this record concurrently.
+	}
+	// Read the currently authorized trigger even for legacy queued records.
+	candidate.PayloadJSON = authorizedDeliveryPayload(*event, message)
+	candidate.Status = "delivered"
+	delivery := projectDelivery(candidate)
+	return &delivery, nil
 }
 
 func (s *Service) expireDeliveries(ctx context.Context, value *Auth) error {
@@ -1496,69 +1519,72 @@ func (s *Service) expireDeliveries(ctx context.Context, value *Auth) error {
 	return nil
 }
 
-func (s *Service) queueWorkspaceEvents(ctx context.Context, current *Auth) error {
-	rows, err := s.repo.ListRecentEvents(ctx, current.SpaceID, s.replayLimit*4)
+func (s *Service) queueWorkspaceEvents(ctx context.Context, current *Auth, scan ReplayRange) (through int64, deferred bool, err error) {
+	budget := s.replayLimit * 4
+	rows, err := s.repo.ListReplayEvents(ctx, current, scan, s.nowUTC().Add(-s.replayWindow), budget+1)
 	if err != nil {
-		return normalizeError(err)
+		return scan.After, false, normalizeError(err)
 	}
-	for left, right := 0, len(rows)-1; left < right; left, right = left+1, right-1 {
-		rows[left], rows[right] = rows[right], rows[left]
+	if len(rows) > budget {
+		rows = rows[:budget]
+		scan.Through = rows[len(rows)-1].Sequence
 	}
 	for _, event := range rows {
 		if ctx.Err() != nil {
-			return normalizeError(ctx.Err())
+			return 0, false, normalizeError(ctx.Err())
 		}
-		if eventScope(event.EventType) == "" || (event.EventType != "bot.runtime_upgrade" && strings.TrimSpace(event.ConversationID) == "") {
-			continue
+		settled, err := s.queueValidatedEvent(ctx, current, event)
+		if err != nil {
+			return event.Sequence - 1, true, normalizeError(err)
 		}
-		if err := s.queueValidatedEvent(ctx, current, event); err != nil {
-			if ctx.Err() != nil || isInvalidToken(err) {
-				return err
-			}
-			// Isolate per-event data or transient lookup failures so a single
-			// malformed historical event can never head-of-line block newer
-			// group or direct bot triggers.
-			continue
+		if !settled {
+			return event.Sequence - 1, true, nil
 		}
 	}
-	return nil
+	return scan.Through, false, nil
 }
 
-func (s *Service) queueValidatedEvent(ctx context.Context, current *Auth, event EventRecord) error {
+// Bot-wide capacity defers discovery until the Bot can admit more work.
+// A refusal scoped to the source event leaves the rest of the scan eligible.
+func (s *Service) queueValidatedEvent(ctx context.Context, current *Auth, event EventRecord) (settled bool, err error) {
 	authorized, message, err := s.authorizeValidatedDelivery(ctx, current, event)
 	if err != nil || !authorized {
-		return err
-	}
-	if allowed, err := s.passesDeliveryRateLimits(ctx, current, event); err != nil || !allowed {
-		return err
+		return true, err
 	}
 	id, err := s.newID("bot delivery")
 	if err != nil {
-		return internalError("generate bot delivery id", err)
+		return false, internalError("generate bot delivery id", err)
 	}
 	now := s.nowUTC()
-	input := DeliveryInsert{ID: "bdl_" + id, BotID: current.BotID, SpaceID: current.SpaceID, Sequence: event.Sequence, EventID: event.ID, EventType: event.EventType, ConversationID: event.ConversationID, PayloadJSON: authorizedDeliveryPayload(event, message), Status: "queued", CreatedAt: now, ExpiresAt: now.Add(s.replayWindow)}
-	return s.repo.WithTx(ctx, func(tx Tx) error {
-		if err := tx.Lock(ctx, "workspace-bot-delivery:"+current.BotID+":"+strconv.FormatInt(event.Sequence, 10)); err != nil {
+	input := DeliveryInsert{ID: "bdl_" + id, BotID: current.BotID, SpaceID: current.SpaceID, Sequence: event.Sequence, EventID: event.ID, EventType: event.EventType, ConversationID: event.ConversationID, PayloadJSON: authorizedDeliveryPayload(event, message), Status: "queued", CreatedAt: now, ExpiresAt: event.CreatedAt.Add(s.replayWindow)}
+	err = s.repo.WithTx(ctx, func(tx Tx) error {
+		if err := tx.Lock(ctx, "workspace-bot-delivery:"+current.BotID); err != nil {
 			return err
 		}
-		_, err := tx.InsertDelivery(ctx, input)
+		allowed, deferScan, err := s.checkDeliveryLimits(ctx, tx, current, event)
+		if err != nil || !allowed {
+			settled = !deferScan
+			return err
+		}
+		_, err = tx.InsertDelivery(ctx, input)
+		settled = err == nil
 		return err
 	})
+	return settled, err
 }
 
-func (s *Service) hasExpiredAfter(ctx context.Context, value *Auth, cursor int64) (bool, error) {
+func (s *Service) hasExpiredDeliveries(ctx context.Context, value *Auth, scan ReplayRange) (bool, error) {
 	checker, ok := s.repo.(ExpiredDeliveryLookup)
 	if !ok {
 		return false, nil
 	}
-	return checker.HasExpiredDeliveryAfter(ctx, value.BotID, value.SpaceID, cursor, s.nowUTC())
+	return checker.HasExpiredDeliveries(ctx, value.BotID, value.SpaceID, scan, s.nowUTC())
 }
 
 // ExpiredDeliveryLookup is optional for small adapters. PostgreSQL implements
 // it so replay can distinguish an empty queue from a gap caused by expiry.
 type ExpiredDeliveryLookup interface {
-	HasExpiredDeliveryAfter(ctx context.Context, botID, spaceID string, afterSequence int64, now time.Time) (bool, error)
+	HasExpiredDeliveries(ctx context.Context, botID, spaceID string, scan ReplayRange, now time.Time) (bool, error)
 }
 
 func eventScope(eventType string) string {
@@ -1845,34 +1871,37 @@ func truncateUTF8Bytes(value string, maxBytes int) string {
 	return value[:cut]
 }
 
-func (s *Service) passesDeliveryRateLimits(ctx context.Context, value *Auth, event EventRecord) (bool, error) {
-	limits, err := s.repo.GetLimits(ctx, value.BotID, value.SpaceID)
+func (s *Service) checkDeliveryLimits(ctx context.Context, repo ReadRepository, value *Auth, event EventRecord) (allowed, deferScan bool, err error) {
+	limits, err := repo.GetLimits(ctx, value.BotID, value.SpaceID)
 	if err != nil {
-		return false, normalizeError(err)
+		return false, false, normalizeError(err)
 	}
 	if limits == nil {
-		return false, nil
+		return false, false, nil
 	}
 	now := s.nowUTC()
-	recent, err := s.repo.CountRecentDeliveries(ctx, value.BotID, value.SpaceID, now.Add(-time.Minute))
+	recent, err := repo.CountRecentDeliveries(ctx, value.BotID, value.SpaceID, now.Add(-time.Minute))
 	if err != nil {
-		return false, normalizeError(err)
+		return false, false, normalizeError(err)
 	}
 	if limits.RequestsPerMinute > 0 && recent >= limits.RequestsPerMinute {
-		return false, nil
+		return false, true, nil
 	}
-	memberDaily, err := s.repo.CountMemberDeliveries(ctx, value.BotID, value.SpaceID, event.ActorUserID, now.Add(-24*time.Hour))
+	memberDaily, err := repo.CountMemberDeliveries(ctx, value.BotID, value.SpaceID, event.ActorUserID, now.Add(-24*time.Hour))
 	if err != nil {
-		return false, normalizeError(err)
+		return false, false, normalizeError(err)
 	}
 	if limits.MemberDailyRequests > 0 && memberDaily >= limits.MemberDailyRequests {
-		return false, nil
+		return false, false, nil
 	}
-	backlog, err := s.repo.CountPendingDeliveries(ctx, value.BotID, value.SpaceID, now)
+	backlog, err := repo.CountPendingDeliveries(ctx, value.BotID, value.SpaceID, now)
 	if err != nil {
-		return false, normalizeError(err)
+		return false, false, normalizeError(err)
 	}
-	return limits.EventBacklogLimit <= 0 || backlog < limits.EventBacklogLimit, nil
+	if limits.EventBacklogLimit > 0 && backlog >= limits.EventBacklogLimit {
+		return false, true, nil
+	}
+	return true, false, nil
 }
 
 func (s *Service) recordCardRejection(ctx context.Context, value *Auth, meta auth.RequestMeta, action, targetID string, cause error) error {

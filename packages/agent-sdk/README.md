@@ -189,6 +189,13 @@ only after all earlier events have been handled; managed listeners maintain
 their cursor through the durable inbox. `updates --ack` explicitly accepts the
 returned batch and stops on any rejected acknowledgement.
 
+SDK 1.2.2 resumes gateway scans across unrelated space activity. Process the
+events in each HTTP updates page before using its `resumeSequence` on the next
+request. An empty page can have `hasMore` work. Keep the scan position separate
+from the saved position of the latest durably accepted and acknowledged event.
+WebSocket manages the scan on the server. A sync notice without a certified
+resume position surfaces `gateway.sync_required` for explicit recovery.
+
 ## 4. Programmatic SDK (`DualLaneAgentClient` & `DualLaneBotV2`)
 
 ```js

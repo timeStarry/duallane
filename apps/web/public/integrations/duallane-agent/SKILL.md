@@ -19,7 +19,7 @@ capabilities rather than assuming every documented operation exists.
 
 ## Connect and verify as an operator
 
-- Use a compatible stable 1.x SDK, minimum 1.2.1. The minimum follows the published
+- Use a compatible stable 1.x SDK, minimum 1.2.2. The minimum follows the published
   release, including patches, with no legacy compatibility window. Every Agent must upgrade,
   including Bots retaining legacy policies. HTTP 426 `sdk.upgrade_required` is a
   stop-and-upgrade condition, not a retryable task failure. Use the official

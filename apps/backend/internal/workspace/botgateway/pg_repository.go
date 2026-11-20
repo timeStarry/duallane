@@ -563,48 +563,33 @@ func currentSequence(ctx context.Context, queryer pgQueryer, spaceID string) (in
 	return sequence, nil
 }
 
-func (r *PGRepository) EarliestSequence(ctx context.Context, spaceID string) (int64, error) {
-	if r == nil || r.pool == nil {
-		return 0, internalError("read bot event window", errors.New("workspace postgres pool is required"))
-	}
-	var sequence int64
-	err := r.pool.QueryRow(ctx, `SELECT COALESCE(MIN(seq), 0) FROM workspace_events WHERE space_id = $1`, spaceID).Scan(&sequence)
-	if err != nil {
-		return 0, internalError("read bot event window", err)
-	}
-	return sequence, nil
-}
-
-func (r *PGRepository) ListRecentEvents(ctx context.Context, spaceID string, limit int) ([]EventRecord, error) {
-	if r == nil || r.pool == nil {
-		return nil, internalError("list recent bot events", errors.New("workspace postgres pool is required"))
-	}
-	return listEvents(ctx, r.pool, spaceID, 0, limit, true)
-}
-
-func (r *PGRepository) ListEventsAfter(ctx context.Context, spaceID string, afterSequence int64, limit int) ([]EventRecord, error) {
+func (r *PGRepository) ListReplayEvents(ctx context.Context, value *Auth, scan ReplayRange, since time.Time, limit int) ([]EventRecord, error) {
 	if r == nil || r.pool == nil {
 		return nil, internalError("list bot events", errors.New("workspace postgres pool is required"))
 	}
-	return listEvents(ctx, r.pool, spaceID, afterSequence, limit, false)
+	return listReplayEvents(ctx, r.pool, value, scan, since, limit)
 }
 
-func listEvents(ctx context.Context, queryer pgQueryer, spaceID string, afterSequence int64, limit int, recent bool) ([]EventRecord, error) {
+func listReplayEvents(ctx context.Context, queryer pgQueryer, value *Auth, scan ReplayRange, since time.Time, limit int) ([]EventRecord, error) {
 	limit = boundedLimit(limit, DefaultBatchSize, MaxBatchSize)
-	query := `
-		SELECT id, space_id, seq, type, actor_user_id, conversation_id,
-		       target_type, target_id, payload_json, created_at
-		FROM workspace_events WHERE space_id = $1
-	`
-	args := []any{spaceID}
-	if !recent {
-		query += ` AND seq > $2 ORDER BY seq ASC LIMIT $3`
-		args = append(args, afterSequence, limit)
-	} else {
-		query += ` ORDER BY seq DESC LIMIT $2`
-		args = append(args, limit)
-	}
-	rows, err := queryer.Query(ctx, query, args...)
+	// Coarse discovery filters avoid spending the page on space traffic that
+	// cannot address this bot. Authorization and payload projection are separate.
+	rows, err := queryer.Query(ctx, `
+		SELECT e.id, e.space_id, e.seq, e.type, e.actor_user_id, e.conversation_id,
+		       e.target_type, e.target_id, e.payload_json, e.created_at
+		FROM workspace_events e
+		WHERE e.space_id = $1 AND e.seq > $2 AND e.seq <= $3 AND e.created_at > $4
+		  AND e.type IN ('message.created', 'bot.mentioned', 'bot.runtime_upgrade', 'command.invoked', 'card.action')
+		  AND (e.type = 'bot.runtime_upgrade' OR EXISTS (
+		      SELECT 1 FROM conversation_members m
+		      WHERE m.conversation_id = e.conversation_id AND m.user_id = $5 AND m.removed_at IS NULL
+		  ))
+		  AND NOT EXISTS (
+		      SELECT 1 FROM workspace_agent_bot_deliveries d
+		      WHERE d.bot_id = $6 AND d.space_id = e.space_id AND d.sequence = e.seq
+		  )
+		ORDER BY e.seq ASC LIMIT $7
+	`, value.SpaceID, scan.After, scan.Through, since.UTC(), value.UserID, value.BotID, limit)
 	if err != nil {
 		return nil, internalError("list bot events", err)
 	}
@@ -678,23 +663,23 @@ func getEvent(ctx context.Context, queryer pgQueryer, spaceID, eventID string) (
 	return &value, nil
 }
 
-func (r *PGRepository) ListDeliveriesAfter(ctx context.Context, botID, spaceID string, afterSequence int64, now time.Time, limit int) ([]DeliveryRecord, error) {
+func (r *PGRepository) ListPendingDeliveries(ctx context.Context, botID, spaceID string, scan ReplayRange, now time.Time, limit int) ([]DeliveryRecord, error) {
 	if r == nil || r.pool == nil {
 		return nil, internalError("list bot deliveries", errors.New("workspace postgres pool is required"))
 	}
-	return listDeliveriesAfter(ctx, r.pool, botID, spaceID, afterSequence, now, limit)
+	return listPendingDeliveries(ctx, r.pool, botID, spaceID, scan, now, limit)
 }
 
-func listDeliveriesAfter(ctx context.Context, queryer pgQueryer, botID, spaceID string, afterSequence int64, now time.Time, limit int) ([]DeliveryRecord, error) {
+func listPendingDeliveries(ctx context.Context, queryer pgQueryer, botID, spaceID string, scan ReplayRange, now time.Time, limit int) ([]DeliveryRecord, error) {
 	limit = boundedLimit(limit, DefaultReplayLimit, MaxReplayLimit*4+1)
 	rows, err := queryer.Query(ctx, `
 		SELECT id, bot_id, space_id, sequence, event_id, event_type, conversation_id,
 		       payload_json, status, attempts, created_at, expires_at
 		FROM workspace_agent_bot_deliveries
-		WHERE bot_id = $1 AND space_id = $2 AND sequence > $3
-		  AND status <> 'expired' AND expires_at > $4
-		ORDER BY sequence ASC LIMIT $5
-	`, botID, spaceID, afterSequence, now.UTC(), limit)
+		WHERE bot_id = $1 AND space_id = $2 AND sequence > $3 AND sequence <= $4
+		  AND status IN ('queued', 'delivered') AND expires_at > $5
+		ORDER BY sequence ASC LIMIT $6
+	`, botID, spaceID, scan.After, scan.Through, now.UTC(), limit)
 	if err != nil {
 		return nil, internalError("list bot deliveries", err)
 	}
@@ -721,28 +706,8 @@ func listDeliveriesAfter(ctx context.Context, queryer pgQueryer, botID, spaceID 
 	return result, nil
 }
 
-func (r *PGRepository) EarliestDeliverySequence(ctx context.Context, botID, spaceID string, now time.Time) (int64, error) {
-	if r == nil || r.pool == nil {
-		return 0, internalError("read bot delivery window", errors.New("workspace postgres pool is required"))
-	}
-	var value *int64
-	err := r.pool.QueryRow(ctx, `
-		SELECT MIN(sequence) FROM workspace_agent_bot_deliveries
-		WHERE bot_id = $1 AND space_id = $2 AND status <> 'expired' AND expires_at > $3
-	`, botID, spaceID, now.UTC()).Scan(&value)
-	if err != nil {
-		return 0, internalError("read bot delivery window", err)
-	}
-	if value == nil {
-		return 0, nil
-	}
-	return *value, nil
-}
-
-// HasExpiredDeliveryAfter distinguishes an empty replay queue from a cursor
-// gap caused by delivery expiry. The delivery table remains the durable
-// authority; callers must still re-authorize the event before delivery.
-func (r *PGRepository) HasExpiredDeliveryAfter(ctx context.Context, botID, spaceID string, afterSequence int64, now time.Time) (bool, error) {
+// HasExpiredDeliveries identifies a settled gap in the bot's own queue.
+func (r *PGRepository) HasExpiredDeliveries(ctx context.Context, botID, spaceID string, scan ReplayRange, now time.Time) (bool, error) {
 	if r == nil || r.pool == nil {
 		return false, internalError("read expired bot delivery window", errors.New("workspace postgres pool is required"))
 	}
@@ -750,10 +715,10 @@ func (r *PGRepository) HasExpiredDeliveryAfter(ctx context.Context, botID, space
 	err := r.pool.QueryRow(ctx, `
 		SELECT EXISTS (
 			SELECT 1 FROM workspace_agent_bot_deliveries
-			WHERE bot_id = $1 AND space_id = $2 AND sequence > $3
-			  AND (status = 'expired' OR expires_at <= $4)
+			WHERE bot_id = $1 AND space_id = $2 AND sequence > $3 AND sequence <= $4
+			  AND (status = 'expired' OR (status IN ('queued', 'delivered') AND expires_at <= $5))
 		)
-	`, botID, spaceID, afterSequence, now.UTC()).Scan(&expired)
+	`, botID, spaceID, scan.After, scan.Through, now.UTC()).Scan(&expired)
 	if err != nil {
 		return false, internalError("read expired bot delivery window", err)
 	}
@@ -992,44 +957,16 @@ func (t *pgTx) CurrentSequence(ctx context.Context, spaceID string) (int64, erro
 	return currentSequence(ctx, t.tx, spaceID)
 }
 
-func (t *pgTx) EarliestSequence(ctx context.Context, spaceID string) (int64, error) {
-	var sequence int64
-	err := t.tx.QueryRow(ctx, `SELECT COALESCE(MIN(seq), 0) FROM workspace_events WHERE space_id = $1`, spaceID).Scan(&sequence)
-	if err != nil {
-		return 0, internalError("read bot event window", err)
-	}
-	return sequence, nil
-}
-
-func (t *pgTx) ListRecentEvents(ctx context.Context, spaceID string, limit int) ([]EventRecord, error) {
-	return listEvents(ctx, t.tx, spaceID, 0, limit, true)
-}
-
-func (t *pgTx) ListEventsAfter(ctx context.Context, spaceID string, afterSequence int64, limit int) ([]EventRecord, error) {
-	return listEvents(ctx, t.tx, spaceID, afterSequence, limit, false)
+func (t *pgTx) ListReplayEvents(ctx context.Context, value *Auth, scan ReplayRange, since time.Time, limit int) ([]EventRecord, error) {
+	return listReplayEvents(ctx, t.tx, value, scan, since, limit)
 }
 
 func (t *pgTx) GetEvent(ctx context.Context, spaceID, eventID string) (*EventRecord, error) {
 	return getEvent(ctx, t.tx, spaceID, eventID)
 }
 
-func (t *pgTx) ListDeliveriesAfter(ctx context.Context, botID, spaceID string, afterSequence int64, now time.Time, limit int) ([]DeliveryRecord, error) {
-	return listDeliveriesAfter(ctx, t.tx, botID, spaceID, afterSequence, now, limit)
-}
-
-func (t *pgTx) EarliestDeliverySequence(ctx context.Context, botID, spaceID string, now time.Time) (int64, error) {
-	var value *int64
-	err := t.tx.QueryRow(ctx, `
-		SELECT MIN(sequence) FROM workspace_agent_bot_deliveries
-		WHERE bot_id = $1 AND space_id = $2 AND status <> 'expired' AND expires_at > $3
-	`, botID, spaceID, now.UTC()).Scan(&value)
-	if err != nil {
-		return 0, internalError("read bot delivery window", err)
-	}
-	if value == nil {
-		return 0, nil
-	}
-	return *value, nil
+func (t *pgTx) ListPendingDeliveries(ctx context.Context, botID, spaceID string, scan ReplayRange, now time.Time, limit int) ([]DeliveryRecord, error) {
+	return listPendingDeliveries(ctx, t.tx, botID, spaceID, scan, now, limit)
 }
 
 func (t *pgTx) GetMessageTrigger(ctx context.Context, spaceID, conversationID, messageID string) (*MessageTrigger, error) {
@@ -1123,7 +1060,7 @@ func (t *pgTx) InsertIdempotency(ctx context.Context, input IdempotencyRecordInp
 func (t *pgTx) ExpireDeliveries(ctx context.Context, botID, spaceID string, now time.Time) error {
 	_, err := t.tx.Exec(ctx, `
 		UPDATE workspace_agent_bot_deliveries SET status = 'expired'
-		WHERE bot_id = $1 AND space_id = $2 AND status <> 'expired' AND expires_at <= $3
+		WHERE bot_id = $1 AND space_id = $2 AND status IN ('queued', 'delivered') AND expires_at <= $3
 	`, botID, spaceID, now.UTC())
 	if err != nil {
 		return internalError("expire bot deliveries", err)
@@ -1132,7 +1069,7 @@ func (t *pgTx) ExpireDeliveries(ctx context.Context, botID, spaceID string, now 
 }
 
 func (t *pgTx) ExpireDelivery(ctx context.Context, id string) error {
-	_, err := t.tx.Exec(ctx, `UPDATE workspace_agent_bot_deliveries SET status = 'expired' WHERE id = $1 AND status <> 'expired'`, id)
+	_, err := t.tx.Exec(ctx, `UPDATE workspace_agent_bot_deliveries SET status = 'expired' WHERE id = $1 AND status IN ('queued', 'delivered')`, id)
 	if err != nil {
 		return internalError("expire bot delivery", err)
 	}
@@ -1152,36 +1089,49 @@ func (t *pgTx) InsertDelivery(ctx context.Context, input DeliveryInsert) (bool, 
 	return tag.RowsAffected() == 1, nil
 }
 
-func (t *pgTx) MarkDeliveryDelivered(ctx context.Context, id string, now time.Time) error {
-	_, err := t.tx.Exec(ctx, `
+func (t *pgTx) MarkDeliveryDelivered(ctx context.Context, id string, now time.Time) (int, error) {
+	var attempts int
+	err := t.tx.QueryRow(ctx, `
 		UPDATE workspace_agent_bot_deliveries
-		SET status = CASE WHEN status = 'queued' THEN 'delivered' ELSE status END,
-		    delivered_at = COALESCE(delivered_at, $1), attempts = attempts + 1
-		WHERE id = $2 AND status <> 'expired'
-	`, now.UTC(), id)
-	if err != nil {
-		return internalError("mark bot delivery delivered", err)
+		SET status = 'delivered', delivered_at = COALESCE(delivered_at, $1), attempts = attempts + 1
+		WHERE id = $2 AND status IN ('queued', 'delivered') AND expires_at > $1
+		RETURNING attempts
+	`, now.UTC(), id).Scan(&attempts)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, nil
 	}
-	return nil
+	if err != nil {
+		return 0, internalError("mark bot delivery delivered", err)
+	}
+	return attempts, nil
 }
 
-func (t *pgTx) AcknowledgeDelivery(ctx context.Context, botID, spaceID, eventID string, sequence int64, now time.Time) (bool, error) {
-	query := `
-		UPDATE workspace_agent_bot_deliveries SET status = 'acked', acked_at = $1
-		WHERE bot_id = $2 AND space_id = $3 AND status <> 'acked' AND `
-	args := []any{now.UTC(), botID, spaceID}
-	if eventID != "" {
-		query += `event_id = $4`
-		args = append(args, eventID)
-	} else {
-		query += `sequence = $4`
-		args = append(args, sequence)
+func (t *pgTx) AcknowledgeDelivery(ctx context.Context, botID, spaceID, eventID string, sequence int64, now time.Time) (bool, bool, error) {
+	var id, status string
+	var expiresAt time.Time
+	err := t.tx.QueryRow(ctx, `
+		SELECT id, status, expires_at FROM workspace_agent_bot_deliveries
+		WHERE bot_id = $1 AND space_id = $2
+		  AND ($3 = '' OR event_id = $3) AND ($4 = 0 OR sequence = $4)
+		FOR UPDATE
+	`, botID, spaceID, eventID, sequence).Scan(&id, &status, &expiresAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, false, nil
 	}
-	tag, err := t.tx.Exec(ctx, query, args...)
 	if err != nil {
-		return false, internalError("acknowledge bot delivery", err)
+		return false, false, internalError("read bot delivery acknowledgement", err)
 	}
-	return tag.RowsAffected() > 0, nil
+	if status == "acked" {
+		return true, false, nil
+	}
+	if status != "delivered" || !expiresAt.After(now) {
+		return false, false, nil
+	}
+	_, err = t.tx.Exec(ctx, `UPDATE workspace_agent_bot_deliveries SET status = 'acked', acked_at = $1 WHERE id = $2`, now.UTC(), id)
+	if err != nil {
+		return false, false, internalError("acknowledge bot delivery", err)
+	}
+	return true, true, nil
 }
 
 func (t *pgTx) MarkProcessed(ctx context.Context, botID, spaceID string, now time.Time) error {

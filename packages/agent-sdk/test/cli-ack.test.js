@@ -11,10 +11,15 @@ import { loadAgentProfile, saveAgentProfile } from "../src/profile-store.js";
 test("CLI filtered waits do not ACK, and rejected explicit ACK cannot checkpoint", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "dl-cli-ack-"));
   const calls = [];
+  let syncRequired = false;
   const gateway = http.createServer((request, response) => {
     calls.push(request.url);
     response.setHeader("content-type", "application/json");
     if (request.url.includes("/updates")) {
+      if (syncRequired) {
+        response.end(JSON.stringify({ events: [], syncRequired: true, currentSequence: 1000, reason: "replay_window_exceeded" }));
+        return;
+      }
       response.end(JSON.stringify({ events: [
         { eventId: "e1", sequence: 1, conversationId: "other", type: "message.created", payload: {} },
         { eventId: "e2", sequence: 2, conversationId: "selected", type: "message.created", payload: {} },
@@ -46,6 +51,14 @@ test("CLI filtered waits do not ACK, and rejected explicit ACK cannot checkpoint
     assert.equal(loadAgentProfile("default", { configDir: directory }).lastSequence, 0);
     const rejected = await run(["updates", "--ack"]);
     assert.equal(rejected.code, 1);
+    assert.equal(loadAgentProfile("default", { configDir: directory }).lastSequence, 0);
+    syncRequired = true;
+    calls.length = 0;
+    const unsafe = await run(["updates"]);
+    assert.equal(unsafe.code, 0, unsafe.stderr);
+    assert.equal(JSON.parse(unsafe.stdout).syncRequired, true);
+    assert.equal(calls.length, 1);
+    assert.match(calls[0], /afterSequence=0&/u);
     assert.equal(loadAgentProfile("default", { configDir: directory }).lastSequence, 0);
   } finally {
     gateway.closeAllConnections();

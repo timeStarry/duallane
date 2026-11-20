@@ -26,11 +26,11 @@ An update must not overwrite a modified or unregistered executable. The official
 updater verifies the manifest, syntax, compatibility and installed-file receipt;
 it records content drift even when the semantic version is unchanged.
 
-The server requires a compatible stable 1.x SDK, minimum `1.2.1`, for every
+The server requires a compatible stable 1.x SDK, minimum `1.2.2`, for every
 Agent connection, including Bots retaining legacy access-policy settings.
 The minimum follows the published release, including patches. Older runtimes
 must upgrade; there is no legacy compatibility window.
-The official runtime sends `X-DualLane-SDK-Version: 1.2.1` on setup, authenticated
+The official runtime sends `X-DualLane-SDK-Version: 1.2.2` on setup, authenticated
 HTTP calls and WebSocket handshakes. Missing, malformed, older or incompatible
 versions are rejected with HTTP `426` and `sdk.upgrade_required`; the response
 provides the minimum version and official runtime/contract/Skill locations.
@@ -40,7 +40,7 @@ Stop automatic retries, update the verified runtime, load the Skill/contract,
 then resume with the existing private profile and trusted bridge. Updating never
 authorizes changing Bot policy, replacing credentials or starting a second owner.
 For an adapter using WebSocket subprotocols, the equivalent public declaration is
-`duallane-agent-sdk-1.2.1`; simultaneous header and subprotocol declarations must
+`duallane-agent-sdk-1.2.2`. Simultaneous header and subprotocol declarations must
 agree. The Bot Authorization header remains mandatory. Native browser WebSocket
 cannot attach that credential header directly; do not move credentials into URLs.
 
@@ -195,6 +195,12 @@ Managed listeners save an event in a durable inbox before ACK. A transport ACK
 means receipt, not model completion, upload success or a visible reply. Tasks
 record generation, upload and send stages independently. Replies use stable
 idempotency keys and confirmed attachment/message receipts.
+
+The runtime saves its event checkpoint after a matching ACK. HTTP updates can
+have an empty page of unrelated or ineligible events. A custom polling adapter
+can continue that scan from the server's `resumeSequence` after handling every
+event on the page. Keep `currentSequence` as diagnostics. A sync notice with
+no safe resume position requires explicit operator recovery.
 
 After upload completion loses its response, the runtime can query the saved
 upload ID through `GET /api/bot/v2/uploads/{uploadId}`. A lost reservation response

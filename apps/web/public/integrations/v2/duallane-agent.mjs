@@ -353,7 +353,7 @@ export function sdkUpgradeInfo(input = {}, origin) {
     } catch { /* Only fixed, same-origin upgrade resources are trusted. */ }
     return new URL(fallback, base).href;
   };
-  const version = (value) => /^1\.(?:0|[1-9]\d{0,5})\.(?:0|[1-9]\d{0,5})$/u.test(value || "") ? value : "1.2.1";
+  const version = (value) => /^1\.(?:0|[1-9]\d{0,5})\.(?:0|[1-9]\d{0,5})$/u.test(value || "") ? value : "1.2.2";
   return Object.freeze({
     minimumSdkVersion: version(input.minimumSdkVersion), latestSdkVersion: version(input.latestSdkVersion),
     runtimeManifestUrl: integrationUrl(input.runtimeManifestUrl, "/integrations/duallane-agent.manifest.json", ["/integrations/duallane-agent.manifest.json", "/integrations/v2/duallane-agent.manifest.json"]),
@@ -1009,7 +1009,7 @@ export function createTaskBrokerMcpAdapter({ url = process.env.DUALLANE_TASK_BRO
 }
 
 // --- src/index.js ---
-export const DUALLANE_AGENT_SDK_VERSION = "1.2.1";
+export const DUALLANE_AGENT_SDK_VERSION = "1.2.2";
 export const DUALLANE_GATEWAY_VERSION = 1;
 
 export function compareRuntimeSemver(a, b) {
@@ -1160,6 +1160,7 @@ export class DualLaneAgentClient {
       onEvent: typeof options.onEvent === "function" ? options.onEvent : async () => {},
       onError: typeof options.onError === "function" ? options.onError : () => {},
       onStatus: typeof options.onStatus === "function" ? options.onStatus : () => {},
+      onCursorAdvance: typeof options.onCursorAdvance === "function" ? options.onCursorAdvance : undefined,
       onSyncRequired: typeof options.onSyncRequired === "function" ? options.onSyncRequired : async () => {}
     };
     if (options.signal) {
@@ -1530,45 +1531,72 @@ export class DualLaneAgentClient {
   }
 
   async pollNextEvent(options = {}) {
-    const deadlineMs = Date.now() + Math.max(1000, Number(options.timeoutMs || 60_000));
+    const deadlineMs = Date.now() + Math.max(1, Math.floor(Number(options.timeoutMs || 60_000)));
     const filterConv = typeof options.conversationId === "string" ? options.conversationId.trim() : "";
     const initialCursor = normalizeSequence(options.afterSequence ?? 0, true);
     let cursor = initialCursor;
     const signal = options.signal;
 
-    while (Date.now() < deadlineMs && !signal?.aborted) {
-      const remainingSec = Math.max(1, Math.ceil((deadlineMs - Date.now()) / 1000));
-      const longPollSec = Math.min(20, remainingSec);
-      const res = await this.getUpdates({ afterSequence: cursor, limit: 50, timeout: longPollSec, signal, timeoutMs: Math.min(this.#requestTimeoutMs, Math.max(1, deadlineMs - Date.now())) });
-      if (res?.syncRequired && Number.isSafeInteger(res?.currentSequence)) {
-        cursor = Math.max(0, Number(res.currentSequence));
-        await options.onSyncRequired?.({ currentSequence: cursor, reason: "sync_required" });
-        continue;
+    while (!signal?.aborted) {
+      const remainingMs = deadlineMs - Date.now();
+      if (!(remainingMs > 0)) break;
+      const afterSequence = cursor;
+      const requestBudgetMs = Math.min(this.#requestTimeoutMs, remainingMs);
+      // Leave time for the response around the gateway's integer-second wait.
+      const longPollSec = Math.min(20, Math.max(0, Math.floor((requestBudgetMs - 250) / 1000)));
+      let res;
+      try {
+        res = await this.getUpdates({ afterSequence, limit: 50, timeout: longPollSec, signal, timeoutMs: requestBudgetMs });
+      } catch (error) {
+        if (error?.code === "network.timeout" && requestBudgetMs === remainingMs) break;
+        throw error;
       }
+      if (signal?.aborted) break;
       const events = Array.isArray(res?.events) ? res.events : [];
       for (const ev of events) {
         const seq = normalizeSequence(ev?.sequence);
-        normalizeId(ev?.eventId, "eventId");
+        const eventId = normalizeId(ev?.eventId, "eventId");
+        if (seq <= cursor) continue;
         if (filterConv && ev?.conversationId !== filterConv) {
           // A filtered read must not acknowledge or persist another conversation.
-          cursor = Math.max(cursor, seq);
+          cursor = seq;
           continue;
         }
         if (options.ack === true) {
-          await this.acknowledge({ eventId: ev.eventId, sequence: seq });
-          cursor = Math.max(cursor, seq);
-          if (!filterConv) {
-            this.#lastSequence = Math.max(this.#lastSequence, seq);
-            await options.onCursorAdvance?.(cursor);
+          await this.acknowledge({ eventId, sequence: seq });
+          if (!filterConv && seq > this.#lastSequence) {
+            this.#lastSequence = seq;
+            await options.onCursorAdvance?.(seq);
           }
         }
         return { timeout: false, event: ev, lastSequence: Math.max(initialCursor, this.#lastSequence), nextSequence: seq, requiresAck: options.ack !== true, transport: "poll" };
       }
-      if (events.length === 0 && Date.now() < deadlineMs && !signal?.aborted) {
-        await new Promise((r) => setTimeout(r, 400));
+      // Advance the request scan only after checking this page for events.
+      if (res?.syncRequired) {
+        const state = replaySyncState(res, cursor);
+        await options.onSyncRequired?.(state);
+        if (signal?.aborted) break;
+        if (state.resumeSequence === undefined) throw replaySyncError();
+        cursor = state.resumeSequence;
+      } else {
+        cursor = replayResumeAfter(res, cursor) ?? cursor;
+      }
+      const delayMs = Math.min(400, deadlineMs - Date.now());
+      if (cursor === afterSequence && delayMs > 0 && !signal?.aborted) {
+        await new Promise((resolve) => {
+          const finish = () => {
+            clearTimeout(timer);
+            signal?.removeEventListener("abort", finish);
+            resolve();
+          };
+          const timer = setTimeout(finish, delayMs);
+          signal?.addEventListener("abort", finish, { once: true });
+        });
       }
     }
-    return { timeout: true, lastSequence: Math.max(initialCursor, this.#lastSequence), transport: "poll" };
+    const result = { timeout: true, lastSequence: Math.max(initialCursor, this.#lastSequence), transport: "poll" };
+    if (!filterConv && !signal?.aborted && cursor > initialCursor) result.resumeSequence = cursor;
+    return result;
   }
 
   async #taskOperation(operation, key, execute) {
@@ -1705,7 +1733,7 @@ export class DualLaneAgentClient {
         if (frame.type === "event") {
           this.#eventChain = this.#eventChain.then(async () => {
             if (generation !== this.#generation || this.#stopped) return;
-            await this.#consumeEvent(frame.event);
+            await this.#consumeEvent(frame.event, generation);
           }).catch((error) => {
             this.#reportError(error);
             if (generation === this.#generation) {
@@ -1719,26 +1747,25 @@ export class DualLaneAgentClient {
           return;
         }
         if (frame.type === "sync_required") {
-          const currentSequence = normalizeSequence(frame.currentSequence ?? 0, true);
           this.#eventChain = this.#eventChain.then(async () => {
             if (generation !== this.#generation || this.#stopped) return;
-            await this.#callbacks.onSyncRequired?.({
-              currentSequence,
-              reason: safeErrorText(frame.reason, "sync_required")
-            });
+            const state = replaySyncState(frame, this.#lastSequence);
+            await this.#callbacks.onSyncRequired(state);
             if (generation !== this.#generation || this.#stopped) return;
-            this.#lastSequence = currentSequence;
+            if (state.resumeSequence === undefined) throw replaySyncError();
             if (!ready) {
               ready = true;
               clearTimeout(timeout);
               this.#attempt = 0;
               this.#startHeartbeat(generation);
-              this.#callbacks.onStatus?.({ status: "connected", syncRequired: true, currentSequence, lastSequence: this.#lastSequence });
+              this.#callbacks.onStatus?.({ status: "connected", syncRequired: true, ...state, lastSequence: this.#lastSequence });
               resolve(this);
             }
           }).catch((error) => {
+            if (generation !== this.#generation || this.#stopped) return;
             const safe = this.#reportError(error);
             if (!ready) reject(safe);
+            this.stop();
           });
           return;
         }
@@ -1767,15 +1794,18 @@ export class DualLaneAgentClient {
     });
   }
 
-  async #consumeEvent(event) {
+  async #consumeEvent(event, generation) {
     if (!event || typeof event !== "object") throw new DualLaneAgentError("gateway.invalid_event", "DualLane Agent Gateway event is invalid");
     const sequence = normalizeSequence(event.sequence);
     const eventId = normalizeId(event.eventId, "eventId");
-    if (sequence > this.#lastSequence) await this.#callbacks.onEvent?.(Object.freeze({ ...event, sequence, eventId }));
-    if (this.#callbacks.manualAck) return;
+    if (sequence <= this.#lastSequence) return;
+    await this.#callbacks.onEvent(Object.freeze({ ...event, sequence, eventId }));
+    if (this.#callbacks.manualAck || generation !== this.#generation || !this.connected) return;
     const ack = await this.#ackOverSocket({ sequence, eventId });
-    if (!ack.acknowledged) throw new DualLaneAgentError("gateway.ack_rejected", "Event acknowledgement was rejected");
-    this.#lastSequence = Math.max(this.#lastSequence, sequence);
+    if (!ack.acknowledged || ack.eventId !== eventId) throw new DualLaneAgentError("gateway.ack_rejected", "Event acknowledgement was rejected");
+    if (generation !== this.#generation || sequence <= this.#lastSequence) return;
+    this.#lastSequence = sequence;
+    await this.#callbacks.onCursorAdvance?.(sequence);
   }
 
   async #ackOverSocket(input) {
@@ -1907,6 +1937,26 @@ function normalizeSequence(value, allowZero = false) {
   const number = typeof value === "number" ? value : Number(value);
   if (!Number.isSafeInteger(number) || number < (allowZero ? 0 : 1)) throw new TypeError("sequence is invalid");
   return number;
+}
+
+function replayResumeAfter(page, afterSequence) {
+  const resume = page?.resumeSequence;
+  if (Number.isSafeInteger(resume) && Number.isSafeInteger(page.currentSequence)
+      && resume > afterSequence && resume <= page.currentSequence) {
+    return resume;
+  }
+  return undefined;
+}
+
+function replaySyncState(page, afterSequence) {
+  const reason = ["cursor_ahead", "replay_window_exceeded"].includes(page.reason) ? page.reason : "sync_required";
+  const currentSequence = Number.isSafeInteger(page.currentSequence) && page.currentSequence >= 0 ? page.currentSequence : 0;
+  const resumeSequence = reason === "cursor_ahead" ? undefined : replayResumeAfter(page, afterSequence);
+  return Object.freeze(compact({ currentSequence, reason, resumeSequence }));
+}
+
+function replaySyncError() {
+  return new DualLaneAgentError("gateway.sync_required", "Event replay requires explicit resynchronization");
 }
 
 function normalizeAck(input = {}) {
@@ -4538,7 +4588,6 @@ export function createDualLaneMcpServer(options = {}) {
             timeoutMs: remainingMs,
             conversationId: filterConv,
             ack: false,
-            onSyncRequired: () => { throw new DualLaneAgentError("gateway.sync_required", "Event replay requires explicit resynchronization"); },
           });
           if (polled.timeout) {
             return {
@@ -4587,9 +4636,6 @@ export function createDualLaneMcpServer(options = {}) {
                   lastSequence: startSeq,
                   requiresAck: true,
                 });
-              },
-              async onSyncRequired() {
-                throw new DualLaneAgentError("gateway.sync_required", "Event replay requires explicit resynchronization");
               },
               onError(err) {
                 if (!settled && !err?.retryable) {
@@ -5229,8 +5275,8 @@ export async function runResidentDaemon(flags = {}) {
   if (!profile) throw new Error(`Profile "${profileName}" is not configured. Run setup first.`);
   const savedCfg = readDaemonRecord(profileName) || {};
   if (savedCfg.pausedReason) {
-    // Revoked credentials remain paused across supervisor restarts until an
-    // operator explicitly runs daemon start/restart with the updated profile.
+    // Keep pauses across supervisor restarts until an operator restarts the
+    // daemon after resolving the cause.
     writeDaemonRecord(profileName, { ...savedCfg, pid: process.pid, healthy: false });
     if (savedCfg.pausedReason === "sdk.upgrade_required") process.stderr.write(`DualLane Agent SDK upgrade required. Run: ${runtimeUpgradeCommand(resolveStandaloneScriptPath(), profileName, profile.url)}\n${JSON.stringify(savedCfg.upgrade || {})}\n`);
     await new Promise((resolve) => {
@@ -5273,6 +5319,7 @@ export async function runResidentDaemon(flags = {}) {
   const botId = me?.bot?.id || profile.botId;
   const scopes = Array.isArray(me?.scopes) ? me.scopes : [];
   let stopped = false, runtime, pendingRestart = false, updateBusy = false, stopResolve, upgradeFailure;
+  const pollAbort = new AbortController();
   const shutdownSignal = new Promise((resolve) => { stopResolve = resolve; });
   const timers = [];
   const updateRecord = (patch) => {
@@ -5281,7 +5328,7 @@ export async function runResidentDaemon(flags = {}) {
   };
   const shutdown = async () => {
     if (stopped) return;
-    stopped = true; client.stop(); timers.forEach(clearInterval);
+    stopped = true; pollAbort.abort(); client.stop(); timers.forEach(clearInterval);
     await runtime?.close(); stopResolve();
   };
   const signalShutdown = () => { void shutdown(); };
@@ -5308,6 +5355,10 @@ export async function runResidentDaemon(flags = {}) {
     await runtime.close(); process.removeListener("SIGINT", signalShutdown); process.removeListener("SIGTERM", signalShutdown); throw error;
   }
   let cursor = Number(profile.lastSequence || 0);
+  const acceptCursor = (sequence) => {
+    updateProfileCursor(profileName, sequence);
+    cursor = sequence;
+  };
   const acceptEvent = (event) => {
     const isBusinessEvent = ["message.created", "bot.mentioned", "command.invoked", "card.action"].includes(event.type);
     const accepted = runtime.accept(isBusinessEvent ? event : { ...event, conversationId: event.conversationId || "__runtime__" }, { completed: !isBusinessEvent });
@@ -5333,26 +5384,29 @@ export async function runResidentDaemon(flags = {}) {
     const periodic = setInterval(() => { void checkUpdate(); }, 20 * 60_000); periodic.unref?.(); timers.push(periodic);
   }
   const polling = async () => {
+    let scanSequence = cursor;
     let failures = 0;
     while (!stopped) {
       try {
-        const result = await client.pollNextEvent({ afterSequence: cursor, timeoutMs: 25_000, ack: false,
-          onSyncRequired({ currentSequence }) {
-            cursor = currentSequence; updateProfileCursor(profileName, cursor);
-          } });
+        const result = await client.pollNextEvent({
+          afterSequence: scanSequence, timeoutMs: 25_000, ack: false, signal: pollAbort.signal,
+        });
+        if (stopped) break;
         if (result.event) {
           acceptEvent(result.event);
           await client.acknowledge({ eventId: result.event.eventId, sequence: result.event.sequence });
-          cursor = result.event.sequence;
-          updateProfileCursor(profileName, cursor);
-        }
+          if (stopped) break;
+          acceptCursor(result.event.sequence);
+          scanSequence = cursor;
+        } else if (result.resumeSequence !== undefined) scanSequence = result.resumeSequence;
         failures = 0; updateRecord({ healthy: true, probeError: null });
       } catch (error) {
+        if (stopped) break;
         const safe = safeAgentError(error); failures += 1;
-        updateRecord({ healthy: false, probeError: safe.code }); log(safe.code);
+        const pause = safe.code === "gateway.sync_required" || [401, 403].includes(error?.statusCode ?? error?.status);
+        updateRecord({ healthy: false, probeError: safe.code, ...(pause ? { pausedReason: safe.code } : {}) }); log(safe.code);
         if (error?.code === "sdk.upgrade_required") { pauseUpgrade(error); throw error; }
-        if ([401, 403].includes(error?.statusCode ?? error?.status)) updateRecord({ pausedReason: safe.code });
-        if ([401, 403].includes(error?.statusCode ?? error?.status) || !safe.retryable || failures >= 3) throw new AgentRuntimeError(safe.code);
+        if (pause || !safe.retryable || failures >= 3) throw new AgentRuntimeError(safe.code);
         await new Promise((resolve) => setTimeout(resolve, Math.min(5000, failures * 1000)));
       }
     }
@@ -5362,12 +5416,17 @@ export async function runResidentDaemon(flags = {}) {
     else {
       try {
         await client.connect({ lastSequence: cursor,
-          onEvent(event) { acceptEvent(event); updateProfileCursor(profileName, event.sequence); },
-          onStatus(state) { updateRecord({ healthy: state.status === "connected", probeError: state.status === "connected" ? null : "gateway.disconnected" }); },
-          onSyncRequired({ currentSequence }) { cursor = currentSequence; updateProfileCursor(profileName, cursor); },
+          onEvent: acceptEvent,
+          onCursorAdvance: acceptCursor,
+          onStatus(state) {
+            if (record.pausedReason) return;
+            updateRecord({ healthy: state.status === "connected", probeError: state.status === "connected" ? null : "gateway.disconnected" });
+          },
           onError(error) {
-            const safe = safeAgentError(error); updateRecord({ healthy: false, probeError: safe.code }); log(safe.code);
-            if ([401, 403].includes(error?.statusCode ?? error?.status)) { updateRecord({ pausedReason: safe.code }); void shutdown(); }
+            const safe = safeAgentError(error);
+            const pause = safe.code === "gateway.sync_required" || [401, 403].includes(error?.statusCode ?? error?.status);
+            updateRecord({ healthy: false, probeError: safe.code, ...(pause ? { pausedReason: safe.code } : {}) }); log(safe.code);
+            if (pause) void shutdown();
           },
         });
         await shutdownSignal;
@@ -6109,16 +6168,7 @@ async function main() {
         ? Number(flags["after-sequence"])
         : profile.lastSequence || 0;
     const timeout = flags.timeout !== undefined ? Number(flags.timeout) : 0;
-    let res = await client.getUpdates({ afterSequence, limit: Number(flags.limit || 50), timeout });
-    if (res?.syncRequired && Number(res.currentSequence) > 0 && afterSequence === 0) {
-      const fallbackSeq = Math.max(0, Number(res.currentSequence) - 100);
-      const retry = await client
-        .getUpdates({ afterSequence: fallbackSeq, limit: Number(flags.limit || 50), timeout })
-        .catch(optionalGatewayResult);
-      if (retry && !retry.syncRequired) {
-        res = retry;
-      }
-    }
+    const res = await client.getUpdates({ afterSequence, limit: Number(flags.limit || 50), timeout });
     const events = Array.isArray(res?.events) ? res.events : [];
     if (flags.ack) {
       if (res?.syncRequired) throw new DualLaneAgentError("gateway.sync_required", "Event replay requires explicit resynchronization");
@@ -6156,7 +6206,6 @@ async function main() {
         timeoutMs: remainingMs,
         conversationId: filterConv,
         ack: false,
-        onSyncRequired: () => { throw new DualLaneAgentError("gateway.sync_required", "Event replay requires explicit resynchronization"); },
       });
       if (polled.timeout || !polled.event) {
         return {
@@ -6232,9 +6281,6 @@ async function main() {
                     event,
                     context,
                   });
-                },
-                async onSyncRequired() {
-                  throw new DualLaneAgentError("gateway.sync_required", "Event replay requires explicit resynchronization");
                 },
                 onError(err) {
                   if (!settled && !err?.retryable) {

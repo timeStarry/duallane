@@ -184,6 +184,57 @@ test("explicit daemon restart clears a prior pause before launch and cannot over
   } finally { fs.rmSync(fixtureDir, { recursive: true, force: true }); }
 });
 
+test("resident HTTP polling persists only durably accepted and acknowledged events", () => {
+  const fixtureDir = fs.mkdtempSync(path.join(os.tmpdir(), "dl-daemon-replay-"));
+  const configDir = path.join(fixtureDir, "agents");
+  const origin = "https://synthetic.example";
+  const botId = "bot_test_replay";
+  try {
+    saveAgentProfile("default", { url: origin, token: "dl_bot_synthetic_replay_0123456789abcdef", botId, lastSequence: 5 }, { configDir });
+    const script = `
+      import assert from "node:assert/strict";
+      import fs from "node:fs";
+      import path from "node:path";
+      import { runResidentDaemon, getDaemonStateDir } from ${JSON.stringify(new URL("../src/daemon.js", import.meta.url).href)};
+      import { loadAgentProfile } from ${JSON.stringify(new URL("../src/profile-store.js", import.meta.url).href)};
+      import { readAgentTaskSummary } from ${JSON.stringify(new URL("../src/task-runtime.js", import.meta.url).href)};
+      const offsetHistory = [];
+      const botId = ${JSON.stringify(botId)};
+      const origin = ${JSON.stringify(origin)};
+      const json = (body) => new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
+      const stateDir = getDaemonStateDir();
+      const checkPoint = () => loadAgentProfile().lastSequence;
+      let beforeAck;
+      globalThis.fetch = async (url, options) => {
+        if (url.pathname.endsWith("/me")) return json({ bot: { id: botId } });
+        if (url.pathname.endsWith("/events/ack")) {
+          beforeAck = { checkpoint: checkPoint(), completed: readAgentTaskSummary({ stateDir: path.join(stateDir, "tasks"), origin, botId }).completed };
+          return json({ acknowledged: true, ...JSON.parse(options.body) });
+        }
+        const after = Number(url.searchParams.get("afterSequence"));
+        offsetHistory.push(after);
+        if (after === 5) return json({ events: [], hasMore: true, currentSequence: 1200, resumeSequence: 800 });
+        if (after === 800) return json({ events: [{ type: "bot.runtime_upgrade", eventId: "evt_runtime", sequence: 900 }], currentSequence: 1200, resumeSequence: 1200 });
+        return json({ events: [], syncRequired: true, reason: "replay_window_exceeded", currentSequence: 1500 });
+      };
+      await assert.rejects(runResidentDaemon({ transport: "poll", cmd: "unused-handler", "auto-update": "false" }), { code: "gateway.sync_required" });
+      assert.deepEqual(offsetHistory, [5, 800, 900]);
+      assert.deepEqual(beforeAck, { checkpoint: 5, completed: 1 });
+      assert.equal(checkPoint(), 900);
+      const record = JSON.parse(fs.readFileSync(path.join(stateDir, "default.json"), "utf8"));
+      assert.equal(record.pausedReason, "gateway.sync_required");
+    `;
+    const result = spawnSync(process.execPath, ["--input-type=module", "-e", script], {
+      env: { ...process.env, DUALLANE_AGENT_CONFIG_DIR: configDir },
+      encoding: "utf8",
+      timeout: 5000,
+    });
+    assert.equal(result.status, 0, result.stderr);
+  } finally {
+    fs.rmSync(fixtureDir, { recursive: true, force: true });
+  }
+});
+
 test("daemon generates valid macOS launchd plist with KeepAlive and escaped paths", () => {
   const xml = buildLaunchdPlistXml({
     label: getDaemonServiceLabel("comet"),

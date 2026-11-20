@@ -1,6 +1,6 @@
 {
   "name": "@duallane/agent-sdk",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "description": "Zero-dependency universal JavaScript SDK, CLI, and Stdio MCP server for the DualLane Agent Bot Gateway.",
   "type": "module",
   "private": true,

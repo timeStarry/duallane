@@ -8,6 +8,23 @@ export interface AgentEvent {
   payload: Record<string, unknown>;
 }
 
+export interface AgentReplaySyncState {
+  readonly currentSequence: number;
+  readonly reason: string;
+  /** Server-certified scan position. Use for this scan without checkpointing it. */
+  readonly resumeSequence?: number;
+}
+
+export interface AgentReplayPage {
+  events: AgentEvent[];
+  currentSequence?: number;
+  hasMore?: boolean;
+  syncRequired?: boolean;
+  reason?: string;
+  /** Inspect all returned events before using this position for the next request. */
+  resumeSequence?: number;
+}
+
 export type AgentMessageBlock =
   | { type: "text"; text: string }
   | { type: "mention"; userId: string; label?: string }
@@ -126,9 +143,10 @@ export class DualLaneAgentClient {
   listConversations(): Promise<{ conversations: Array<Record<string, unknown>> }>;
   getContext(conversationId: string, options?: { limit?: number }): Promise<{ conversation: Record<string, unknown>; messages: Array<Record<string, unknown>> }>;
   acknowledge(input: { eventId: string; sequence: number }): Promise<{ acknowledged: true; eventId: string; sequence: number }>;
-  getUpdates(options?: { afterSequence?: number; limit?: number; timeout?: number; signal?: AbortSignal; timeoutMs?: number }): Promise<{ events: AgentEvent[]; syncRequired?: boolean; currentSequence?: number }>;
-  pollNextEvent(options?: { afterSequence?: number; conversationId?: string; timeoutMs?: number; signal?: AbortSignal; ack?: boolean; onCursorAdvance?: (sequence: number) => void; onSyncRequired?: (state: { currentSequence: number; reason: string }) => void }): Promise<{ timeout: boolean; event?: AgentEvent; lastSequence: number; nextSequence?: number; requiresAck?: boolean; transport: "poll" }>;
-  connect(options?: { lastSequence?: number; ack?: boolean; signal?: AbortSignal; onEvent?: (event: AgentEvent) => Promise<void> | void; onError?: (error: DualLaneAgentError) => void; onStatus?: (state: Record<string, unknown>) => void; onSyncRequired?: (state: { currentSequence: number; reason: string }) => Promise<void> | void }): Promise<this>;
+  getUpdates(options?: { afterSequence?: number; limit?: number; timeout?: number; signal?: AbortSignal; timeoutMs?: number }): Promise<AgentReplayPage>;
+  /** An unfiltered timeout may return a transient resumeSequence. */
+  pollNextEvent(options?: { afterSequence?: number; conversationId?: string; timeoutMs?: number; signal?: AbortSignal; ack?: boolean; onCursorAdvance?: (sequence: number) => Promise<void> | void; onSyncRequired?: (state: AgentReplaySyncState) => Promise<void> | void }): Promise<{ timeout: boolean; event?: AgentEvent; lastSequence: number; nextSequence?: number; resumeSequence?: number; requiresAck?: boolean; transport: "poll" }>;
+  connect(options?: { lastSequence?: number; ack?: boolean; signal?: AbortSignal; onEvent?: (event: AgentEvent) => Promise<void> | void; onCursorAdvance?: (sequence: number) => Promise<void> | void; onError?: (error: DualLaneAgentError) => void; onStatus?: (state: Record<string, unknown>) => void; onSyncRequired?: (state: AgentReplaySyncState) => Promise<void> | void }): Promise<this>;
   stop(): void;
   sendMessage(input: { conversationId: string; text?: string; content?: AgentMessageContent | Record<string, unknown>; replyToMessageId?: string; clientMessageId?: string; idempotencyKey?: string; signal?: AbortSignal }): Promise<{ message: { id: string }; operation?: AgentOperationReference }>;
   editMessage(messageId: string, input: string | AgentMessageUpdate, options?: { signal?: AbortSignal; expectedVersion?: string }): Promise<{ message: { id: string; version?: string }; operation?: AgentOperationReference }>;
@@ -223,7 +241,7 @@ export class DualLaneBotV2 {
     }>;
   }>;
   getContext(conversationId: string, limit?: number): Promise<{ conversation: unknown; messages: unknown[] }>;
-  getUpdates(afterSequence?: number, limit?: number): Promise<{ events: unknown[]; nextSequence: number }>;
+  getUpdates(afterSequence?: number, limit?: number): Promise<AgentReplayPage>;
   sendMessage(
     conversationId: string,
     text: string,

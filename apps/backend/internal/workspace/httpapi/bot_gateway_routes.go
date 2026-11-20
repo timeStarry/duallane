@@ -184,7 +184,15 @@ func registerBotGatewayRoutes(router chi.Router, options BotGatewayRouteOptions)
 			writeError(response, internalError())
 			return
 		}
-		lastSeq, _ := strconv.ParseInt(strings.TrimSpace(request.URL.Query().Get("afterSequence")), 10, 64)
+		var lastSeq int64
+		if raw := strings.TrimSpace(request.URL.Query().Get("afterSequence")); raw != "" {
+			var err error
+			lastSeq, err = strconv.ParseInt(raw, 10, 64)
+			if err != nil {
+				writeResult(response, http.StatusOK, nil, botgateway.NewError(botgateway.CodeInvalidSequence, botgateway.MessageInvalidSequence, http.StatusBadRequest))
+				return
+			}
+		}
 		limit, _ := strconv.Atoi(strings.TrimSpace(request.URL.Query().Get("limit")))
 		timeoutSec, _ := strconv.Atoi(strings.TrimSpace(request.URL.Query().Get("timeout")))
 		if timeoutSec > 25 {
@@ -194,7 +202,7 @@ func registerBotGatewayRoutes(router chi.Router, options BotGatewayRouteOptions)
 			LastSequence: lastSeq,
 			Limit:        limit,
 		})
-		if err == nil && timeoutSec > 0 && len(result.Events) == 0 && !result.SyncRequired {
+		if err == nil && timeoutSec > 0 && len(result.Events) == 0 && !result.SyncRequired && !result.HasMore {
 			deadline := time.NewTimer(time.Duration(timeoutSec) * time.Second)
 			defer deadline.Stop()
 			ticker := time.NewTicker(750 * time.Millisecond)
@@ -207,6 +215,7 @@ func registerBotGatewayRoutes(router chi.Router, options BotGatewayRouteOptions)
 				case <-deadline.C:
 					break longPoll
 				case <-ticker.C:
+					lastSeq = max(lastSeq, result.ResumeSequence)
 					next, pollErr := replaySvc.Replay(request.Context(), value, botgateway.ReplayInput{
 						LastSequence: lastSeq,
 						Limit:        limit,
@@ -216,7 +225,7 @@ func registerBotGatewayRoutes(router chi.Router, options BotGatewayRouteOptions)
 						break longPoll
 					}
 					result = next
-					if len(result.Events) > 0 || result.SyncRequired {
+					if len(result.Events) > 0 || result.SyncRequired || result.HasMore {
 						break longPoll
 					}
 				}

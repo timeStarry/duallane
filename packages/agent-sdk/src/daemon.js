@@ -338,8 +338,8 @@ export async function runResidentDaemon(flags = {}) {
   if (!profile) throw new Error(`Profile "${profileName}" is not configured. Run setup first.`);
   const savedCfg = readDaemonRecord(profileName) || {};
   if (savedCfg.pausedReason) {
-    // Revoked credentials remain paused across supervisor restarts until an
-    // operator explicitly runs daemon start/restart with the updated profile.
+    // Keep pauses across supervisor restarts until an operator restarts the
+    // daemon after resolving the cause.
     writeDaemonRecord(profileName, { ...savedCfg, pid: process.pid, healthy: false });
     if (savedCfg.pausedReason === "sdk.upgrade_required") process.stderr.write(`DualLane Agent SDK upgrade required. Run: ${runtimeUpgradeCommand(resolveStandaloneScriptPath(), profileName, profile.url)}\n${JSON.stringify(savedCfg.upgrade || {})}\n`);
     await new Promise((resolve) => {
@@ -382,6 +382,7 @@ export async function runResidentDaemon(flags = {}) {
   const botId = me?.bot?.id || profile.botId;
   const scopes = Array.isArray(me?.scopes) ? me.scopes : [];
   let stopped = false, runtime, pendingRestart = false, updateBusy = false, stopResolve, upgradeFailure;
+  const pollAbort = new AbortController();
   const shutdownSignal = new Promise((resolve) => { stopResolve = resolve; });
   const timers = [];
   const updateRecord = (patch) => {
@@ -390,7 +391,7 @@ export async function runResidentDaemon(flags = {}) {
   };
   const shutdown = async () => {
     if (stopped) return;
-    stopped = true; client.stop(); timers.forEach(clearInterval);
+    stopped = true; pollAbort.abort(); client.stop(); timers.forEach(clearInterval);
     await runtime?.close(); stopResolve();
   };
   const signalShutdown = () => { void shutdown(); };
@@ -417,6 +418,10 @@ export async function runResidentDaemon(flags = {}) {
     await runtime.close(); process.removeListener("SIGINT", signalShutdown); process.removeListener("SIGTERM", signalShutdown); throw error;
   }
   let cursor = Number(profile.lastSequence || 0);
+  const acceptCursor = (sequence) => {
+    updateProfileCursor(profileName, sequence);
+    cursor = sequence;
+  };
   const acceptEvent = (event) => {
     const isBusinessEvent = ["message.created", "bot.mentioned", "command.invoked", "card.action"].includes(event.type);
     const accepted = runtime.accept(isBusinessEvent ? event : { ...event, conversationId: event.conversationId || "__runtime__" }, { completed: !isBusinessEvent });
@@ -442,26 +447,29 @@ export async function runResidentDaemon(flags = {}) {
     const periodic = setInterval(() => { void checkUpdate(); }, 20 * 60_000); periodic.unref?.(); timers.push(periodic);
   }
   const polling = async () => {
+    let scanSequence = cursor;
     let failures = 0;
     while (!stopped) {
       try {
-        const result = await client.pollNextEvent({ afterSequence: cursor, timeoutMs: 25_000, ack: false,
-          onSyncRequired({ currentSequence }) {
-            cursor = currentSequence; updateProfileCursor(profileName, cursor);
-          } });
+        const result = await client.pollNextEvent({
+          afterSequence: scanSequence, timeoutMs: 25_000, ack: false, signal: pollAbort.signal,
+        });
+        if (stopped) break;
         if (result.event) {
           acceptEvent(result.event);
           await client.acknowledge({ eventId: result.event.eventId, sequence: result.event.sequence });
-          cursor = result.event.sequence;
-          updateProfileCursor(profileName, cursor);
-        }
+          if (stopped) break;
+          acceptCursor(result.event.sequence);
+          scanSequence = cursor;
+        } else if (result.resumeSequence !== undefined) scanSequence = result.resumeSequence;
         failures = 0; updateRecord({ healthy: true, probeError: null });
       } catch (error) {
+        if (stopped) break;
         const safe = safeAgentError(error); failures += 1;
-        updateRecord({ healthy: false, probeError: safe.code }); log(safe.code);
+        const pause = safe.code === "gateway.sync_required" || [401, 403].includes(error?.statusCode ?? error?.status);
+        updateRecord({ healthy: false, probeError: safe.code, ...(pause ? { pausedReason: safe.code } : {}) }); log(safe.code);
         if (error?.code === "sdk.upgrade_required") { pauseUpgrade(error); throw error; }
-        if ([401, 403].includes(error?.statusCode ?? error?.status)) updateRecord({ pausedReason: safe.code });
-        if ([401, 403].includes(error?.statusCode ?? error?.status) || !safe.retryable || failures >= 3) throw new AgentRuntimeError(safe.code);
+        if (pause || !safe.retryable || failures >= 3) throw new AgentRuntimeError(safe.code);
         await new Promise((resolve) => setTimeout(resolve, Math.min(5000, failures * 1000)));
       }
     }
@@ -471,12 +479,17 @@ export async function runResidentDaemon(flags = {}) {
     else {
       try {
         await client.connect({ lastSequence: cursor,
-          onEvent(event) { acceptEvent(event); updateProfileCursor(profileName, event.sequence); },
-          onStatus(state) { updateRecord({ healthy: state.status === "connected", probeError: state.status === "connected" ? null : "gateway.disconnected" }); },
-          onSyncRequired({ currentSequence }) { cursor = currentSequence; updateProfileCursor(profileName, cursor); },
+          onEvent: acceptEvent,
+          onCursorAdvance: acceptCursor,
+          onStatus(state) {
+            if (record.pausedReason) return;
+            updateRecord({ healthy: state.status === "connected", probeError: state.status === "connected" ? null : "gateway.disconnected" });
+          },
           onError(error) {
-            const safe = safeAgentError(error); updateRecord({ healthy: false, probeError: safe.code }); log(safe.code);
-            if ([401, 403].includes(error?.statusCode ?? error?.status)) { updateRecord({ pausedReason: safe.code }); void shutdown(); }
+            const safe = safeAgentError(error);
+            const pause = safe.code === "gateway.sync_required" || [401, 403].includes(error?.statusCode ?? error?.status);
+            updateRecord({ healthy: false, probeError: safe.code, ...(pause ? { pausedReason: safe.code } : {}) }); log(safe.code);
+            if (pause) void shutdown();
           },
         });
         await shutdownSignal;

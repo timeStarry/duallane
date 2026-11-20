@@ -469,16 +469,7 @@ async function main() {
         ? Number(flags["after-sequence"])
         : profile.lastSequence || 0;
     const timeout = flags.timeout !== undefined ? Number(flags.timeout) : 0;
-    let res = await client.getUpdates({ afterSequence, limit: Number(flags.limit || 50), timeout });
-    if (res?.syncRequired && Number(res.currentSequence) > 0 && afterSequence === 0) {
-      const fallbackSeq = Math.max(0, Number(res.currentSequence) - 100);
-      const retry = await client
-        .getUpdates({ afterSequence: fallbackSeq, limit: Number(flags.limit || 50), timeout })
-        .catch(optionalGatewayResult);
-      if (retry && !retry.syncRequired) {
-        res = retry;
-      }
-    }
+    const res = await client.getUpdates({ afterSequence, limit: Number(flags.limit || 50), timeout });
     const events = Array.isArray(res?.events) ? res.events : [];
     if (flags.ack) {
       if (res?.syncRequired) throw new DualLaneAgentError("gateway.sync_required", "Event replay requires explicit resynchronization");
@@ -516,7 +507,6 @@ async function main() {
         timeoutMs: remainingMs,
         conversationId: filterConv,
         ack: false,
-        onSyncRequired: () => { throw new DualLaneAgentError("gateway.sync_required", "Event replay requires explicit resynchronization"); },
       });
       if (polled.timeout || !polled.event) {
         return {
@@ -592,9 +582,6 @@ async function main() {
                     event,
                     context,
                   });
-                },
-                async onSyncRequired() {
-                  throw new DualLaneAgentError("gateway.sync_required", "Event replay requires explicit resynchronization");
                 },
                 onError(err) {
                   if (!settled && !err?.retryable) {
