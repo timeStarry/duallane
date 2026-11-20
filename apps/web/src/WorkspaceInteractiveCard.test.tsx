@@ -1,6 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import {
+  WorkspaceEchoCard,
   WorkspaceEchoReleaseCard,
   supportsWorkspaceInteractiveCard,
   type WorkspaceCardProjection
@@ -42,5 +43,38 @@ describe("Workspace release card", () => {
     expect(html).toContain("管理订阅");
     expect(html).toContain("个人设置 -&gt; 我的表情 -&gt; 合集详情");
     expect(html).toContain("workspace-release-location");
+  });
+});
+
+describe("Workspace Echo requirement cards", () => {
+  function renderRequirement(status: string, archiveOutcome?: string, cardType = "echo.request-status") {
+    const card: WorkspaceCardProjection = {
+      block: { type: "card", cardId: "card_requirement", cardType, schemaVersion: 1, fallbackText: "需求反馈" },
+      payload: { publicId: "REQ-TEST-0001", title: "测试需求", phase: status === "archived" ? "archived" : "formal", status, archiveOutcome },
+      status: "active",
+      revision: 2,
+      actions: []
+    };
+    return renderToStaticMarkup(<WorkspaceEchoCard card={card} onRefresh={() => {}} />);
+  }
+
+  it.each([
+    ["implemented", "已实现"],
+    ["rejected", "已驳回"],
+    ["duplicate", "重复提案"],
+    ["withdrawn", "已撤回"],
+    ["cancelled", "已取消"]
+  ])("shows the current archived outcome %s as %s", (outcome, label) => {
+    expect(renderRequirement("archived", outcome)).toContain(`<em>${label}</em>`);
+  });
+
+  it("keeps the archived fallback when the outcome is absent or unrecognized", () => {
+    expect(renderRequirement("archived")).toContain("<em>已归档</em>");
+    expect(renderRequirement("archived", "future_outcome")).toContain("<em>已归档</em>");
+  });
+
+  it("does not apply an archived outcome to an active requirement or solicitation", () => {
+    expect(renderRequirement("delivered", "implemented")).toContain("<em>已交付</em>");
+    expect(renderRequirement("archived", "implemented", "echo.solicitation")).toContain("<em>已归档</em>");
   });
 });
