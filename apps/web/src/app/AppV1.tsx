@@ -300,7 +300,7 @@ export function AppV1() {
   const handleSendLoginEmailCode = async () => {
     const trimmed = loginEmail.trim();
     if (!trimmed) {
-      setAuthError("请输入登录邮箱");
+      setAuthError("请输入已绑定的邮箱地址");
       return;
     }
     setAuthError("");
@@ -508,7 +508,7 @@ export function AppV1() {
                   }}
                   options={[
                     { value: "github", label: "GitHub 登录" },
-                    { value: "email", label: "邮箱验证码" },
+                    { value: "email", label: "已绑定邮箱" },
                   ]}
                 />
 
@@ -562,9 +562,8 @@ export function AppV1() {
                         type="email"
                         value={loginEmail}
                         onChange={(e) => setLoginEmail(e.target.value)}
-                        placeholder="输入登录邮箱"
-                        aria-label="登录邮箱"
-                        aria-describedby="workspace-email-login-help"
+                        placeholder="输入已绑定的邮箱"
+                        aria-label="已绑定邮箱"
                         className="flex-1"
                       />
                       <Button
@@ -589,8 +588,8 @@ export function AppV1() {
                       className="font-mono tracking-[0.2em]"
                     />
                     {loginMaskedEmail && loginChallengeId && (
-                      <p role="status" className="text-[11px] text-dl-text-tertiary">
-                        若该邮箱可用于登录，请在 {loginMaskedEmail} 查收验证码。验证码有效期为 10 分钟。
+                      <p className="text-[11px] text-dl-text-tertiary">
+                        验证码已发送至 {loginMaskedEmail}，10 分钟内有效。
                       </p>
                     )}
                     <Button
@@ -604,8 +603,8 @@ export function AppV1() {
                       <span>验证并进入共享空间</span>
                       <ArrowRight className="size-4 shrink-0" strokeWidth={2} />
                     </Button>
-                    <p id="workspace-email-login-help" className="text-center text-[11px] text-dl-text-tertiary">
-                      请使用已绑定的邮箱。未绑定时可用 GitHub 已验证的主邮箱，收不到验证码时可先通过 GitHub 登录同步邮箱。
+                    <p className="text-center text-[11px] text-dl-text-tertiary">
+                      仅限已在个人设置绑定邮箱的成员登录
                     </p>
                   </form>
                 )}

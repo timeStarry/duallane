@@ -39,7 +39,6 @@ type stubRepo struct {
 	announcement      SystemAnnouncement
 	ackedByUser       map[string]string
 	boundByUser       map[string]string
-	githubEmailByUser map[string]string
 	challenges        map[string]EmailChallengeStoreRecord
 	mobileRelease     MobileClientRelease
 }
@@ -318,17 +317,6 @@ func (s *stubRepo) FindBoundEmailOwner(_ context.Context, normalizedEmail string
 	}
 	return "", nil
 }
-func (s *stubRepo) FindEmailLoginOwner(ctx context.Context, normalizedEmail string) (string, error) {
-	if userID, err := s.FindBoundEmailOwner(ctx, normalizedEmail); userID != "" || err != nil {
-		return userID, err
-	}
-	for userID, address := range s.githubEmailByUser {
-		if s.boundByUser[userID] == "" && address == normalizedEmail {
-			return userID, nil
-		}
-	}
-	return "", nil
-}
 func (s *stubRepo) CheckEmailChallengeCooldown(_ context.Context, _ string, _ time.Time) error {
 	return nil
 }
@@ -381,12 +369,8 @@ func (s *stubRepo) UnbindAccountEmail(_ context.Context, actorID string, _ time.
 	delete(s.boundByUser, actorID)
 	return nil
 }
-func (s *stubRepo) ResolveEmailLoginMember(ctx context.Context, userID, normalizedEmail string, _ time.Time) (V1BootstrapMember, error) {
-	owner, err := s.FindEmailLoginOwner(ctx, normalizedEmail)
-	if err != nil {
-		return V1BootstrapMember{}, err
-	}
-	if owner != userID {
+func (s *stubRepo) ResolveEmailLoginMember(_ context.Context, userID, normalizedEmail string, _ time.Time) (V1BootstrapMember, error) {
+	if s.boundByUser[userID] != normalizedEmail {
 		return V1BootstrapMember{}, ErrChallengeInvalid
 	}
 	return V1BootstrapMember{ID: userID, DisplayName: "已绑定成员", Kind: "human", Role: "member"}, nil
@@ -912,7 +896,7 @@ func (s *stubSessionIssuer) IssueMobileLoginSession(_ context.Context, userID st
 }
 
 func TestAnnouncementAndEmailBindLoginLifecycle(t *testing.T) {
-	repo := &stubRepo{githubEmailByUser: map[string]string{"usr_owner_1": "github@example.com"}}
+	repo := &stubRepo{}
 	mailer := &stubEmailSender{}
 	sessions := &stubSessionIssuer{}
 	svc := NewService(repo).WithEmailSender(mailer)
@@ -959,15 +943,13 @@ func TestAnnouncementAndEmailBindLoginLifecycle(t *testing.T) {
 		t.Fatalf("expected new announcement ID and always mode, got %+v", repo.announcement)
 	}
 
-	// An ineligible email gets the same response without sending or saving a code.
+	// 2. Unbound email login is strictly rejected (no registration via email)
 	unboundLoginReq := httptest.NewRequest(http.MethodPost, "/api/v1/auth/email/send-code", bytes.NewBufferString(`{"email":"stranger@example.com"}`))
 	unboundLoginReq.Header.Set("X-Test-Auth", "none")
 	unboundLoginRec := httptest.NewRecorder()
 	r.ServeHTTP(unboundLoginRec, unboundLoginReq)
-	var ineligible EmailChallengeSummary
-	if unboundLoginRec.Code != http.StatusOK || json.Unmarshal(unboundLoginRec.Body.Bytes(), &ineligible) != nil ||
-		ineligible.ChallengeID == "" || mailer.lastRecipient != "" || len(repo.challenges) != 0 {
-		t.Fatalf("ineligible send-code differed publicly or sent mail: %d (%s)", unboundLoginRec.Code, unboundLoginRec.Body.String())
+	if unboundLoginRec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 when attempting login with unbound email, got %d (%s)", unboundLoginRec.Code, unboundLoginRec.Body.String())
 	}
 
 	// 3. Authenticated GitHub user binds email
@@ -1037,21 +1019,6 @@ func TestAnnouncementAndEmailBindLoginLifecycle(t *testing.T) {
 	r.ServeHTTP(unbindRec, unbindReq)
 	if unbindRec.Code != http.StatusOK || repo.boundByUser["usr_owner_1"] != "" {
 		t.Fatalf("expected 200 on email unbind, got %d", unbindRec.Code)
-	}
-
-	// A GitHub-synced address follows the same mobile login contract after unbinding.
-	sessions.mobileIssuedUser = ""
-	githubSend := httptest.NewRecorder()
-	r.ServeHTTP(githubSend, httptest.NewRequest(http.MethodPost, "/api/v1/auth/email/send-code", strings.NewReader(`{"email":"GitHub@Example.com"}`)))
-	var githubChallenge EmailChallengeSummary
-	if githubSend.Code != http.StatusOK || mailer.lastRecipient != "github@example.com" ||
-		json.Unmarshal(githubSend.Body.Bytes(), &githubChallenge) != nil || githubChallenge.ChallengeID == "" {
-		t.Fatalf("GitHub email send-code: %d (%s)", githubSend.Code, githubSend.Body.String())
-	}
-	githubVerify := httptest.NewRecorder()
-	r.ServeHTTP(githubVerify, httptest.NewRequest(http.MethodPost, "/api/v1/auth/email/verify", strings.NewReader(`{"email":"github@example.com","challengeId":"`+githubChallenge.ChallengeID+`","code":"654321","client":"mobile"}`)))
-	if githubVerify.Code != http.StatusOK || sessions.mobileIssuedUser != "usr_owner_1" {
-		t.Fatalf("GitHub email mobile verification: %d (%s)", githubVerify.Code, githubVerify.Body.String())
 	}
 }
 

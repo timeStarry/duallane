@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/mail"
 	"net/url"
 	"strconv"
 	"strings"
@@ -125,20 +124,15 @@ func (g *GitHubOAuth) Profile(ctx context.Context, code, redirectURI string) (Gi
 		AvatarURL: userPayload.AvatarURL,
 		Email:     userPayload.Email,
 	}
-	if profile.ID == "" || profile.Login == "" {
-		return GitHubProfile{}, withGitHubCause(githubFailedError(), "profile", "github profile is incomplete", nil)
-	}
-	var emails []githubEmail
-	if err := g.getJSON(deadlineCtx, GitHubEmailsEndpoint+"?per_page=100", token.AccessToken, &emails); err != nil {
-		if profile.Email == "" {
+	if profile.Email == "" {
+		var emails []githubEmail
+		if err := g.getJSON(deadlineCtx, GitHubEmailsEndpoint, token.AccessToken, &emails); err != nil {
 			return GitHubProfile{}, withGitHubCause(githubFailedError(), "email", "github email lookup", err)
 		}
-	} else {
-		loginEmail := verifiedPrimaryLoginEmail(emails)
-		profile.verifiedLoginEmail = &loginEmail
-		if profile.Email == "" {
-			profile.Email = primaryVerifiedEmail(emails)
-		}
+		profile.Email = primaryVerifiedEmail(emails)
+	}
+	if profile.ID == "" || profile.Login == "" {
+		return GitHubProfile{}, withGitHubCause(githubFailedError(), "profile", "github profile is incomplete", nil)
 	}
 	normalized, err := NormalizeGitHubProfile(profile)
 	if err != nil {
@@ -163,28 +157,6 @@ func primaryVerifiedEmail(emails []githubEmail) string {
 		if item.Verified {
 			return strings.TrimSpace(item.Email)
 		}
-	}
-	return ""
-}
-
-func verifiedPrimaryLoginEmail(emails []githubEmail) string {
-	for _, item := range emails {
-		if !item.Primary || !item.Verified {
-			continue
-		}
-		value := strings.ToLower(strings.TrimSpace(item.Email))
-		if len(value) > 320 {
-			continue
-		}
-		parsed, err := mail.ParseAddress(value)
-		if err != nil || parsed.Address != value {
-			continue
-		}
-		_, domain, _ := strings.Cut(value, "@")
-		if !strings.Contains(domain, ".") || strings.ContainsRune(domain, '@') || domain == "users.noreply.github.com" || value == "noreply@github.com" {
-			continue
-		}
-		return value
 	}
 	return ""
 }

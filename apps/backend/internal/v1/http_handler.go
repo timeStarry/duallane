@@ -1779,6 +1779,8 @@ func writeServiceError(w http.ResponseWriter, err error) {
 		writeJSONError(w, http.StatusTooManyRequests, "v1.rate_limited", msg)
 	case errors.Is(err, ErrEmailAlreadyBound):
 		writeJSONError(w, http.StatusConflict, "v1.email_already_bound", "该邮箱已被其他空间成员绑定")
+	case errors.Is(err, ErrEmailNotBound):
+		writeJSONError(w, http.StatusBadRequest, "v1.email_not_bound", "该邮箱尚未绑定已有账号，请先使用 GitHub 登录后在个人设置中绑定")
 	case errors.Is(err, ErrChallengeInvalid):
 		writeJSONError(w, http.StatusBadRequest, "v1.challenge_invalid", "验证码错误或已失效，请重新获取")
 	case errors.Is(err, ErrInvalidInput):
