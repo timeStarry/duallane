@@ -103,11 +103,12 @@ function MemberRemarkPopoverButton({
           type="button"
           size="sm"
           variant="ghost"
-          aria-label={`为 ${displayLabel} 设置备注`}
+          title="仅自己可见的个人备注"
+          aria-label={`为 ${displayLabel} 设置个人备注（仅自己可见）`}
           className="h-6 shrink-0 gap-1 px-2 text-[11px] text-dl-text-tertiary hover:text-dl-lane-shared"
         >
           <Pencil className="size-3" strokeWidth={1.85} />
-          <span>备注</span>
+          <span>个人备注</span>
         </Button>
       </PopoverTrigger>
       <PopoverContent side="left" align="center" className="w-64 p-3 space-y-2.5">
@@ -865,6 +866,36 @@ export function InspectorPane() {
                         )}
                       </div>
                     )}
+
+                    {activeConv.kind === "direct" && (() => {
+                      const peerId = activeConv.memberIds.find((id) => id !== currentUser?.id);
+                      const peer = peerId ? members[peerId] : undefined;
+                      const peerIsBot =
+                        !peer ||
+                        peer.role === "bot" ||
+                        peer.id === "usr_system_beacon" ||
+                        peer.id === "usr_system_echo" ||
+                        peer.id.startsWith("usr_bot_");
+                      if (!peer || peerIsBot) return null;
+                      return (
+                        <div className="flex items-center justify-between gap-2 rounded-2xl border border-dl-border-hairline bg-dl-surface-subtle/40 px-3.5 py-2.5">
+                          <div className="min-w-0">
+                            <div className="text-xs font-semibold text-dl-text-primary">
+                              好友个人备注
+                            </div>
+                            <div className="truncate text-[11px] text-dl-text-tertiary">
+                              {peer.remark ? `${peer.remark}（仅自己可见）` : "未设置（仅自己可见）"}
+                            </div>
+                          </div>
+                          <MemberRemarkPopoverButton
+                            userId={peer.id}
+                            currentRemark={peer.remark}
+                            originalNickname={peer.nickname || peer.handle}
+                            displayLabel={peer.displayName}
+                          />
+                        </div>
+                      );
+                    })()}
 
                     {activeConv.kind !== "saved" && (
                       <div className="space-y-2.5">

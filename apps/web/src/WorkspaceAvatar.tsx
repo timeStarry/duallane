@@ -18,6 +18,9 @@ export function sanitizeWorkspaceAvatarUrl(value?: string | null) {
   if (/^\/api\/workspace\/avatars\/[a-z0-9_-]+\/[a-z0-9-]+$/i.test(candidate)) {
     return candidate;
   }
+  if (/^\/api\/v1\/bots\/[a-z0-9_-]+\/avatar(\?v=[0-9]+)?$/i.test(candidate)) {
+    return candidate;
+  }
   try {
     const url = new URL(candidate);
     if (
@@ -40,7 +43,10 @@ export function workspaceAvatarInitial(name: string) {
 }
 
 export function getWorkspaceAvatarAttemptUrl(value: string, retryToken: string) {
-  if (!retryToken || !value.startsWith("/api/workspace/avatars/")) {
+  if (
+    !retryToken ||
+    (!value.startsWith("/api/workspace/avatars/") && !value.startsWith("/api/v1/bots/"))
+  ) {
     return value;
   }
   return `${value}?retry=${encodeURIComponent(retryToken)}`;

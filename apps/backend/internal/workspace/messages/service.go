@@ -693,6 +693,7 @@ func (s *Service) createMessageInTransaction(ctx context.Context, tx Tx, actor *
 	if err != nil {
 		return nil, nil, err
 	}
+	message.CreationSeq = event.Seq
 	if s.requireMessageJobs {
 		jobTx, ok := tx.(MessageJobTx)
 		if !ok {

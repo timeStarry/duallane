@@ -852,7 +852,9 @@ func listMessages(ctx context.Context, queryer pgQueryer, options ListOptions) (
 	if around := strings.TrimSpace(options.Around); around != "" {
 		anchor, err := scanMessage(queryer.QueryRow(ctx, messageSelect+`
 			WHERE m.space_id = $1 AND m.id = $2 AND m.conversation_id = $3
-			  AND m.topic_id IS NULL AND m.deleted_at IS NULL
+			  AND m.topic_id IS NULL
+			  AND (m.thread_root_id IS NULL OR m.also_send_to_channel = TRUE)
+			  AND m.deleted_at IS NULL
 		`, spaceID, around, conversationID, options.ActorID))
 		if err != nil || anchor == nil {
 			return []MessageRecord{}, err
@@ -897,7 +899,9 @@ func listMessageWindow(ctx context.Context, queryer pgQueryer, options ListOptio
 			SELECT created_at, id
 			FROM messages
 			WHERE space_id = $1 AND id = $2 AND conversation_id = $3
-			  AND topic_id IS NULL AND deleted_at IS NULL
+			  AND topic_id IS NULL
+			  AND (thread_root_id IS NULL OR also_send_to_channel = TRUE)
+			  AND deleted_at IS NULL
 		`, spaceID, cursor, conversationID).Scan(&cursorTime, &cursorID)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return []MessageRecord{}, nil

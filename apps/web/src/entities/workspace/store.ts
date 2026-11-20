@@ -203,8 +203,13 @@ interface WorkspaceState {
   logout: () => Promise<void>;
   selectConversation: (conversationId: string) => void;
   loadConversationMessages: (conversationId: string) => Promise<void>;
+  loadOlderMessages: (conversationId: string) => Promise<number>;
+  loadMessagesAround: (conversationId: string, messageId: string) => Promise<boolean>;
+  hasMoreBeforeByConv: Record<string, boolean>;
+  loadingOlderByConv: Record<string, boolean>;
   markVisibleConversationRead: (conversationId: string, messageId: string) => Promise<void>;
   jumpToMessage: (conversationId: string, messageId: string) => void;
+  clearHighlightedMessage: () => void;
   setDraft: (conversationId: string, text: string, replyToMessageId?: string) => void;
   setScrollTop: (conversationId: string, scrollTop: number) => void;
   setEditingMessageId: (messageId: string | null) => void;
@@ -344,10 +349,39 @@ export function computeGlobalAlertUnreadCount(
 ): number {
   return Object.values(conversations).reduce((sum, conv) => {
     if (conv.notificationLevel === "muted") {
+      return sum;
+    }
+    if (conv.notificationLevel === "mentions") {
       return sum + Math.max(0, conv.mentionCount || 0);
     }
     return sum + Math.max(0, conv.unreadCount || 0);
   }, 0);
+}
+
+function messageMentionsCurrentUser(
+  message: Pick<V1Message, "blocks" | "plainText">,
+  currentUserId?: string
+): boolean {
+  if (Array.isArray(message.blocks)) {
+    for (const block of message.blocks) {
+      if (block.type === "mention") {
+        const uid = String(block.userId || "").trim();
+        const label = String(block.label || "").trim().toLowerCase();
+        if (
+          (currentUserId && uid === currentUserId) ||
+          uid.toLowerCase() === "all" ||
+          label === "all" ||
+          label === "所有人"
+        ) {
+          return true;
+        }
+      }
+    }
+  }
+  if (message.plainText && /(^|\s)@(all|所有人)($|[\s,.!?，。！？])/i.test(message.plainText)) {
+    return true;
+  }
+  return false;
 }
 
 function parseNotificationLevel(raw: unknown): ConversationNotificationLevel | undefined {
@@ -1170,7 +1204,10 @@ function clearBootstrapShellCache(): void {
 
 export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
   const historyRequests = new Map<string, object>();
-  const readRequests = new Map<string, object>();
+  const readRequests = new Map<
+    string,
+    { token: object; queuedMessageId?: string; retryTimer?: ReturnType<typeof setTimeout> }
+  >();
 
   const applyReadProjection = (conversationId: string, raw: Record<string, unknown>) => {
     set((state) => {
@@ -1193,15 +1230,20 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
       const remaining = live.filter((id) => knownUnread.has(id));
       // A newer message can arrive while this HTTP receipt is in flight.
       const count = Math.max(remaining.length, typeof raw.unreadCount === "number" ? raw.unreadCount : 0);
+      const nextUnread = readConversationUnread(
+        {
+          ...raw,
+          unreadCount: count,
+          firstUnreadMessageId: raw.firstUnreadMessageId ?? remaining[0] ?? null,
+        },
+        conversation
+      );
       return {
         conversations: {
           ...state.conversations,
           [conversationId]: {
-            ...conversation, ...readConversationUnread({
-              ...raw, unreadCount: count,
-              firstUnreadMessageId: raw.firstUnreadMessageId ?? remaining[0] ?? null,
-            }, conversation),
-            mentionCount: count === 0 ? 0 : conversation.mentionCount,
+            ...conversation,
+            ...nextUnread,
           },
         },
         liveIncomingIdsByConv: { ...state.liveIncomingIdsByConv, [conversationId]: remaining },
@@ -1501,13 +1543,14 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
       const convId = String(payload.conversationId || eventObj.conversationId || "");
       const readerId = String(payload.userId || eventObj.actorId || "");
       const readAt = String(payload.readAt || payload.lastReadAt || eventObj.createdAt || "");
-      if (!convId || !readerId || !readAt) return;
-      const readMs = Date.parse(readAt);
-      if (!Number.isFinite(readMs)) return;
+      if (!convId || !readerId) return;
       if (readerId === get().currentUser?.id) {
-        applyReadProjection(convId, { ...payload, readAt });
+        applyReadProjection(convId, readAt ? { ...payload, readAt } : payload);
         return;
       }
+      if (!readAt) return;
+      const readMs = Date.parse(readAt);
+      if (!Number.isFinite(readMs)) return;
 
       set((s) => {
         const prevConv = s.conversations[convId];
@@ -1876,15 +1919,65 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
         const arrived = evType === "message.created" && !alreadyExisted &&
           unreadMessage(mapped, s.currentUser?.id) && !live.includes(mapped.id) &&
           serverUnread !== 0 && (mapped.creationSeq ?? Infinity) > readSequence;
-        const removed = (evType === "message.recalled" || mapped.recalledAt || mapped.hiddenByCurrentUser) && live.includes(mapped.id);
+        const wasUnreadBeforeRecall =
+          (evType === "message.recalled" || Boolean(mapped.recalledAt) || Boolean(mapped.hiddenByCurrentUser)) &&
+          (live.includes(mapped.id) ||
+            (serverUnread === undefined &&
+              (prevConv?.unreadCount ?? 0) > 0 &&
+              mapped.senderId !== s.currentUser?.id &&
+              mapped.kind !== "system" &&
+              (mapped.creationSeq !== undefined && readSequence >= 0
+                ? mapped.creationSeq > readSequence
+                : true)));
+        const removed = wasUnreadBeforeRecall;
         const nextLive = serverUnread !== undefined && serverProjection.unreadCount === 0 ? []
           : arrived ? [...live, mapped.id]
           : removed ? live.filter((id) => id !== mapped.id) : live;
-        const nextUnread = serverUnread !== undefined ? serverProjection : readConversationUnread({
-          unreadCount: Math.max(0, serverProjection.unreadCount + Number(arrived) - Number(removed)),
-          firstUnreadMessageId: removed && serverProjection.firstUnreadMessageId === mapped.id ? nextLive[0] ?? null
-            : arrived && serverProjection.unreadCount === 0 ? mapped.id : serverProjection.firstUnreadMessageId,
-        }, serverProjection);
+        const serverMention =
+          typeof convPayload?.mentionCount === "number" && Number.isSafeInteger(convPayload.mentionCount)
+            ? convPayload.mentionCount
+            : undefined;
+        const mentionedMe = arrived && messageMentionsCurrentUser(mapped, s.currentUser?.id);
+        const recalledMention =
+          removed && messageMentionsCurrentUser(mapped, s.currentUser?.id);
+        const computedUnreadCount = Math.max(
+          0,
+          serverProjection.unreadCount + Number(arrived) - Number(removed)
+        );
+        const computedMentionCount =
+          serverMention !== undefined
+            ? serverMention
+            : computedUnreadCount === 0
+              ? 0
+              : Math.min(
+                  computedUnreadCount,
+                  Math.max(
+                    0,
+                    (prevConv?.mentionCount ?? 0) + Number(mentionedMe) - Number(recalledMention)
+                  )
+                );
+        const nextUnread = serverUnread !== undefined
+          ? {
+              ...serverProjection,
+              mentionCount:
+                serverMention !== undefined
+                  ? serverMention
+                  : serverProjection.unreadCount === 0
+                    ? 0
+                    : Math.min(
+                        serverProjection.unreadCount,
+                        Math.max(
+                          0,
+                          (prevConv?.mentionCount ?? 0) + Number(mentionedMe) - Number(recalledMention)
+                        )
+                      ),
+            }
+          : readConversationUnread({
+              unreadCount: computedUnreadCount,
+              mentionCount: computedMentionCount,
+              firstUnreadMessageId: removed && serverProjection.firstUnreadMessageId === mapped.id ? nextLive[0] ?? null
+                : arrived && serverProjection.unreadCount === 0 ? mapped.id : serverProjection.firstUnreadMessageId,
+            }, serverProjection);
 
         const isLatestInConv =
           evType === "message.created" ||
@@ -1927,7 +2020,6 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
                 convPayload?.displayTitle || convPayload?.title || "新对话"
               ),
               ...nextUnread,
-              mentionCount: 0,
               pinnedMessageIds: [],
               memberIds: [],
               lastMessageText: summaryText,
@@ -1973,9 +2065,12 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
             ...s.conversations,
             [convId]: nextConv,
           },
-          conversationOrder: prevConv
-            ? s.conversationOrder
-            : [...s.conversationOrder, convId],
+          conversationOrder:
+            evType === "message.created"
+              ? [convId, ...s.conversationOrder.filter((id) => id !== convId)]
+              : prevConv
+                ? s.conversationOrder
+                : [convId, ...s.conversationOrder],
         };
       });
       return;
@@ -2082,6 +2177,8 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
 
   return {
     isPreviewMode: false,
+    hasMoreBeforeByConv: {},
+    loadingOlderByConv: {},
     authStatus: "checking",
     workspaceAvailability: "checking",
     workspaceStatusMessage: null,
@@ -2451,6 +2548,10 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
             ...s.messagesByConv,
             [conversationId]: window,
           },
+          hasMoreBeforeByConv: {
+            ...s.hasMoreBeforeByConv,
+            [conversationId]: mapped.length >= 80,
+          },
           liveIncomingIdsByConv: {
             ...s.liveIncomingIdsByConv,
             [conversationId]: (s.liveIncomingIdsByConv[conversationId] || []).filter((id) =>
@@ -2471,29 +2572,167 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
       }
     },
 
+    loadOlderMessages: async (conversationId) => {
+      const initial = get();
+      if (initial.isPreviewMode || initial.loadingOlderByConv[conversationId]) return 0;
+      const existing = initial.messagesByConv[conversationId] || [];
+      const oldestAnchor = existing.find((m) => !m.id.startsWith("opt_"));
+      if (!oldestAnchor || initial.hasMoreBeforeByConv[conversationId] === false) return 0;
+
+      set((s) => ({
+        loadingOlderByConv: { ...s.loadingOlderByConv, [conversationId]: true },
+      }));
+      try {
+        const res = await apiV1.listMessages(conversationId, {
+          before: oldestAnchor.id,
+          limit: 60,
+        });
+        const snap = get();
+        if (snap.currentUser?.id !== initial.currentUser?.id || !Array.isArray(res.messages)) {
+          return 0;
+        }
+        const conv = snap.conversations[conversationId];
+        const nextMembers = { ...snap.members };
+        const mapped = res.messages.map((m) => {
+          const msg = mapRawMessage(conversationId, m, nextMembers, {
+            currentUserId: snap.currentUser?.id,
+            convKind: conv?.kind,
+            peerLastReadAt: conv?.peerLastReadAt,
+          });
+          backfillMemberFromMessage(nextMembers, msg);
+          return msg;
+        });
+        const currentList = snap.messagesByConv[conversationId] || [];
+        const existingIds = new Set(currentList.map((m) => m.id));
+        const prepended = mapped.filter((m) => !existingIds.has(m.id));
+        set((s) => ({
+          members: { ...s.members, ...nextMembers },
+          messagesByConv: {
+            ...s.messagesByConv,
+            [conversationId]: [...prepended, ...currentList],
+          },
+          hasMoreBeforeByConv: {
+            ...s.hasMoreBeforeByConv,
+            [conversationId]: mapped.length >= 60,
+          },
+        }));
+        return prepended.length;
+      } catch {
+        return 0;
+      } finally {
+        set((s) => ({
+          loadingOlderByConv: { ...s.loadingOlderByConv, [conversationId]: false },
+        }));
+      }
+    },
+
+    loadMessagesAround: async (conversationId, messageId) => {
+      const initial = get();
+      if (initial.isPreviewMode) return false;
+      try {
+        const res = await apiV1.listMessages(conversationId, {
+          around: messageId,
+          limit: 80,
+        });
+        const snap = get();
+        if (snap.currentUser?.id !== initial.currentUser?.id || !Array.isArray(res.messages) || res.messages.length === 0) {
+          return false;
+        }
+        const conv = snap.conversations[conversationId];
+        const nextMembers = { ...snap.members };
+        const mapped = res.messages.map((m) => {
+          const msg = mapRawMessage(conversationId, m, nextMembers, {
+            currentUserId: snap.currentUser?.id,
+            convKind: conv?.kind,
+            peerLastReadAt: conv?.peerLastReadAt,
+          });
+          backfillMemberFromMessage(nextMembers, msg);
+          return msg;
+        });
+        const currentList = snap.messagesByConv[conversationId] || [];
+        const byId = new Map<string, V1Message>();
+        for (const m of mapped) byId.set(m.id, m);
+        for (const m of currentList) {
+          if (!byId.has(m.id)) byId.set(m.id, m);
+        }
+        const merged = Array.from(byId.values()).sort((a, b) => {
+          const dt = Date.parse(a.createdAt) - Date.parse(b.createdAt);
+          if (Number.isFinite(dt) && dt !== 0) return dt;
+          return a.id.localeCompare(b.id);
+        });
+        set((s) => ({
+          members: { ...s.members, ...nextMembers },
+          messagesByConv: {
+            ...s.messagesByConv,
+            [conversationId]: merged,
+          },
+          hasMoreBeforeByConv: {
+            ...s.hasMoreBeforeByConv,
+            [conversationId]: true,
+          },
+        }));
+        return merged.some((m) => m.id === messageId);
+      } catch {
+        return false;
+      }
+    },
+
     markVisibleConversationRead: async (conversationId, messageId) => {
       const initial = get();
       const conversation = initial.conversations[conversationId];
       if (!initial.currentUser || initial.activeConversationId !== conversationId || !conversation?.unreadCount ||
         initial.conversationEntry?.conversationId !== conversationId || initial.conversationEntry.history !== "ready" ||
-        initial.connectionStatus !== "connected" || readRequests.has(conversationId) ||
-        conversation.lastReadMessageId === messageId) return;
+        initial.connectionStatus !== "connected" || conversation.lastReadMessageId === messageId) return;
       const message = initial.messagesByConv[conversationId]?.find((item) => item.id === messageId);
-        if (!message || !isReadAnchor(message)) return;
+      if (!message || !isReadAnchor(message)) return;
 
-      const request = {};
-      readRequests.set(conversationId, request);
+      const existingReq = readRequests.get(conversationId);
+      if (existingReq) {
+        existingReq.queuedMessageId = messageId;
+        return;
+      }
+
+      const token = {};
+      const entry: { token: object; queuedMessageId?: string; retryTimer?: ReturnType<typeof setTimeout> } = { token };
+      readRequests.set(conversationId, entry);
+      let succeeded = false;
       try {
         const receipt: Record<string, unknown> = initial.isPreviewMode
-          ? { lastReadMessageId: messageId, unreadCount: 0 }
+          ? { lastReadMessageId: messageId, unreadCount: 0, mentionCount: 0 }
           : await apiV1.markConversationRead(conversationId, messageId);
-        if (get().currentUser?.id === initial.currentUser.id && readRequests.get(conversationId) === request) {
+        succeeded = true;
+        if (get().currentUser?.id === initial.currentUser.id && readRequests.get(conversationId)?.token === token) {
           applyReadProjection(conversationId, { lastReadMessageId: messageId, ...receipt });
         }
       } catch {
-        // Scrolling or reconnecting can retry without showing a read error toast.
+        // Schedule one bounded retry if still on this conversation with unread messages.
+        if (readRequests.get(conversationId)?.token === token) {
+          entry.retryTimer = setTimeout(() => {
+            const snap = get();
+            if (
+              snap.currentUser?.id === initial.currentUser?.id &&
+              snap.activeConversationId === conversationId &&
+              (snap.conversations[conversationId]?.unreadCount ?? 0) > 0 &&
+              snap.connectionStatus === "connected"
+            ) {
+              const latestAnchor = (snap.messagesByConv[conversationId] || [])
+                .filter(isReadAnchor)
+                .at(-1);
+              if (latestAnchor) {
+                void snap.markVisibleConversationRead(conversationId, latestAnchor.id);
+              }
+            }
+          }, 1800);
+        }
       } finally {
-        if (readRequests.get(conversationId) === request) readRequests.delete(conversationId);
+        const current = readRequests.get(conversationId);
+        if (current?.token === token) {
+          const queued = current.queuedMessageId;
+          readRequests.delete(conversationId);
+          if (succeeded && queued && queued !== messageId) {
+            void get().markVisibleConversationRead(conversationId, queued);
+          }
+        }
       }
     },
 
@@ -2516,14 +2755,18 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
     },
 
     jumpToMessage: (conversationId, messageId) => {
-      get().selectConversation(conversationId);
+      const state = get();
+      if (state.activeConversationId !== conversationId) {
+        state.selectConversation(conversationId);
+      }
       set({ highlightedMessageId: messageId });
-      setTimeout(() => {
-        if (get().highlightedMessageId === messageId) {
-          set({ highlightedMessageId: null });
-        }
-      }, 2400);
+      const alreadyLoaded = (get().messagesByConv[conversationId] || []).some((m) => m.id === messageId);
+      if (!alreadyLoaded && !get().isPreviewMode) {
+        void get().loadMessagesAround(conversationId, messageId);
+      }
     },
+
+    clearHighlightedMessage: () => set({ highlightedMessageId: null }),
 
     setDraft: (conversationId, text, replyToMessageId) => {
       set((s) => {

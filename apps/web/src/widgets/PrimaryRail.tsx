@@ -9,6 +9,7 @@ import {
   SlidersHorizontal,
   Smartphone,
   User,
+  Users,
 } from "lucide-react";
 import { motion } from "motion/react";
 import { useLaneStore } from "@/entities/lane/store";
@@ -29,7 +30,7 @@ import { cn } from "@/shared/lib/cn";
 import { DualLaneDeckSwitch } from "@/widgets/DualLaneDeckSwitch";
 
 export function PrimaryRail() {
-  const { activeLane, mobileView, setActiveLane, setSearchOpen, openSettings, openAdminConsole } =
+  const { activeLane, mobileView, setActiveLane, setSearchOpen, setContactsOpen, openSettings, openAdminConsole } =
     useLaneStore();
   const {
     isPreviewMode,
@@ -100,6 +101,19 @@ export function PrimaryRail() {
             <Search className="size-[18px]" strokeWidth={1.75} />
           </IconButton>
         </Tooltip>
+
+        {isAuthenticated && (
+          <Tooltip content="通讯录 · 成员与个人备注" side="right">
+            <IconButton
+              variant="ghost"
+              onClick={() => setContactsOpen(true)}
+              className="h-9 w-9 rounded-xl"
+              label="通讯录"
+            >
+              <Users className="size-[18px]" strokeWidth={1.75} />
+            </IconButton>
+          </Tooltip>
+        )}
 
         {isAuthenticated && (
           <Tooltip content="机器人与集成" side="right">

@@ -9,24 +9,50 @@ export function unreadMessage(message: V1Message, currentUserId?: string): boole
     message.senderId !== currentUserId && !message.recalledAt;
 }
 
-export type ConversationUnread = Pick<V1Conversation, "unreadCount" | "firstUnreadMessageId" | "lastReadMessageId" | "lastReadSeq">;
+export type ConversationUnread = Pick<
+  V1Conversation,
+  "unreadCount" | "mentionCount" | "firstUnreadMessageId" | "lastReadMessageId" | "lastReadSeq"
+>;
 
-export function readConversationUnread(raw: Record<string, unknown> | undefined, previous?: ConversationUnread): ConversationUnread {
+export function readConversationUnread(
+  raw: Record<string, unknown> | undefined,
+  previous?: ConversationUnread
+): ConversationUnread {
   const incomingSeq = raw?.lastReadSeq;
-  const projection = typeof incomingSeq === "number" && incomingSeq < (previous?.lastReadSeq ?? -1) ? undefined : raw;
+  const hasPrevSeq = typeof previous?.lastReadSeq === "number" && Number.isSafeInteger(previous.lastReadSeq);
+  const hasIncomingSeq = typeof incomingSeq === "number" && Number.isSafeInteger(incomingSeq);
+  const isStaleSeq = hasIncomingSeq && hasPrevSeq && incomingSeq < (previous!.lastReadSeq as number);
+  const projection = isStaleSeq ? undefined : raw;
   const seq = projection?.lastReadSeq;
   const count = projection?.unreadCount;
-  const unreadCount = typeof count === "number" && Number.isSafeInteger(count) && count >= 0
-    ? count : previous?.unreadCount ?? 0;
+  const mentionRaw = projection?.mentionCount;
+  const unreadCount =
+    typeof count === "number" && Number.isSafeInteger(count) && count >= 0
+      ? count
+      : previous?.unreadCount ?? 0;
+  const mentionCount =
+    unreadCount === 0
+      ? 0
+      : typeof mentionRaw === "number" && Number.isSafeInteger(mentionRaw) && mentionRaw >= 0
+        ? Math.min(mentionRaw, unreadCount)
+        : Math.min(previous?.mentionCount ?? 0, unreadCount);
   const first = projection?.firstUnreadMessageId;
   const last = projection?.lastReadMessageId;
   return {
     unreadCount,
-    firstUnreadMessageId: unreadCount === 0 ? null
-      : typeof first === "string" || first === null ? first : previous?.firstUnreadMessageId,
-    lastReadMessageId: typeof last === "string" || last === null ? last : previous?.lastReadMessageId,
-    lastReadSeq: typeof seq === "number" && Number.isSafeInteger(seq) && seq >= 0
-      ? seq : previous?.lastReadSeq,
+    mentionCount,
+    firstUnreadMessageId:
+      unreadCount === 0
+        ? null
+        : typeof first === "string" || first === null
+          ? first
+          : previous?.firstUnreadMessageId,
+    lastReadMessageId:
+      typeof last === "string" || last === null ? last : previous?.lastReadMessageId,
+    lastReadSeq:
+      typeof seq === "number" && Number.isSafeInteger(seq) && seq >= 0
+        ? seq
+        : previous?.lastReadSeq,
   };
 }
 

@@ -689,6 +689,10 @@ func AdvanceTimelineReadMarker(ctx context.Context, tx pgx.Tx, spaceID, conversa
 	var messageID string
 	var messageAt time.Time
 	var sequence *int64
+	anchorFilter := MainTimelineVisibleMessageSQL
+	if requestedID != "" {
+		anchorFilter = MainTimelineAnchorSQL
+	}
 	err := tx.QueryRow(ctx, `
 		SELECT m.id, m.created_at, MAX(we.seq) AS creation_seq
 		FROM messages m
@@ -696,7 +700,7 @@ func AdvanceTimelineReadMarker(ctx context.Context, tx pgx.Tx, spaceID, conversa
 		LEFT JOIN workspace_events we ON we.space_id = m.space_id AND we.conversation_id = m.conversation_id
 			AND we.type = 'message.created' AND we.target_id = m.id
 		WHERE m.space_id = $1 AND m.conversation_id = $2
-			AND ($4 = '' OR m.id = $4) AND `+MainTimelineVisibleMessageSQL+`
+			AND ($4 = '' OR m.id = $4) AND `+anchorFilter+`
 		GROUP BY m.id, m.created_at
 		ORDER BY creation_seq DESC NULLS LAST, m.created_at DESC, m.id DESC LIMIT 1
 	`, spaceID, conversationID, userID, requestedID).Scan(&messageID, &messageAt, &sequence)
@@ -714,7 +718,9 @@ func AdvanceTimelineReadMarker(ctx context.Context, tx pgx.Tx, spaceID, conversa
 		FROM conversations c
 		WHERE c.id = cm.conversation_id AND c.space_id = $6
 			AND cm.conversation_id = $4 AND cm.user_id = $5 AND cm.removed_at IS NULL
-			AND CASE WHEN $3::bigint IS NOT NULL AND cm.last_read_seq IS NOT NULL THEN $3 > cm.last_read_seq
+			AND CASE
+				WHEN $3::bigint IS NOT NULL AND cm.last_read_seq IS NOT NULL THEN $3 > cm.last_read_seq
+				WHEN $3::bigint IS NOT NULL AND cm.last_read_seq IS NULL THEN TRUE
 				ELSE COALESCE((
 					SELECT (previous.created_at, previous.id) < ($2, $1) FROM messages previous
 					WHERE previous.id = cm.last_read_message_id AND previous.space_id = c.space_id
@@ -867,13 +873,14 @@ const conversationSelect = `SELECT
 	c.created_at, COALESCE(history.latest, c.created_at) AS last_activity_at,
 	history.count AS message_count,
 	cm.last_read_message_id, cm.last_read_at, cm.last_read_seq, cm.notification_level,
-	unread.count AS unread_count, unread.first_message_id
+	unread.count AS unread_count, unread.mention_count AS mention_count, unread.first_message_id
 FROM conversations c
 INNER JOIN conversation_members cm ON cm.conversation_id = c.id
 CROSS JOIN LATERAL (
 	SELECT COUNT(*) AS count, MAX(m.created_at) AS latest
 	FROM messages m WHERE m.conversation_id = c.id AND m.space_id = c.space_id
-		AND m.topic_id IS NULL AND m.deleted_at IS NULL
+		AND m.topic_id IS NULL AND (m.thread_root_id IS NULL OR m.also_send_to_channel = TRUE)
+		AND m.deleted_at IS NULL
 ) history
 CROSS JOIN LATERAL (` + TimelineUnreadSQL + `) unread
 `
@@ -1032,7 +1039,7 @@ func scanConversationRecord(row rowScanner) (ConversationRecord, error) {
 	var record ConversationRecord
 	var avatar *string
 	var createdAt, lastActivity time.Time
-	if err := row.Scan(&record.ID, &record.SpaceID, &record.Type, &record.Title, &avatar, &record.RetentionCount, &createdAt, &lastActivity, &record.MessageCount, &record.LastReadMessageID, &record.LastReadAt, &record.LastReadSeq, &record.NotificationLevel, &record.UnreadCount, &record.FirstUnreadMessageID); err != nil {
+	if err := row.Scan(&record.ID, &record.SpaceID, &record.Type, &record.Title, &avatar, &record.RetentionCount, &createdAt, &lastActivity, &record.MessageCount, &record.LastReadMessageID, &record.LastReadAt, &record.LastReadSeq, &record.NotificationLevel, &record.UnreadCount, &record.MentionCount, &record.FirstUnreadMessageID); err != nil {
 		return ConversationRecord{}, err
 	}
 	record.AvatarEmoji = avatar

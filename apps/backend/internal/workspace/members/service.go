@@ -457,7 +457,7 @@ func (s *Service) remarkTarget(ctx context.Context, repo ReadRepository, actor *
 	if target.ID == actor.ID || target.Kind != "human" {
 		return nil, validationError(CodeMemberRemarkUnsupported, MessageRemarkUnsupported)
 	}
-	if !target.NormallyVisible && actor.Role != RoleOwner {
+	if !target.NormallyVisible && !target.SearchDiscoverable && actor.Role != RoleOwner && actor.Role != RoleAdmin {
 		return nil, permissionDeniedError()
 	}
 	return target, nil

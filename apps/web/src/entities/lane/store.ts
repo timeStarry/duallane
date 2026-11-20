@@ -44,6 +44,7 @@ interface LaneUIState {
   adminConsoleOpen: boolean;
   adminConsoleTab: SpaceAdminTab;
   searchOpen: boolean;
+  contactsOpen: boolean;
   lightboxOpen: boolean;
   lightboxItems: LightboxItem[];
   lightboxIndex: number;
@@ -65,6 +66,7 @@ interface LaneUIState {
   closeAdminConsole: () => void;
   setAdminConsoleTab: (tab: SpaceAdminTab) => void;
   setSearchOpen: (open: boolean) => void;
+  setContactsOpen: (open: boolean) => void;
   openLightbox: (items: LightboxItem[], index: number) => void;
   closeLightbox: () => void;
   setLightboxIndex: (index: number) => void;
@@ -173,6 +175,7 @@ export const useLaneStore = create<LaneUIState>((set, get) => ({
   adminConsoleOpen: false,
   adminConsoleTab: "overview",
   searchOpen: false,
+  contactsOpen: false,
   lightboxOpen: false,
   lightboxItems: [],
   lightboxIndex: 0,
@@ -276,6 +279,7 @@ export const useLaneStore = create<LaneUIState>((set, get) => ({
   closeAdminConsole: () => set({ adminConsoleOpen: false }),
   setAdminConsoleTab: (adminConsoleTab) => set({ adminConsoleTab }),
   setSearchOpen: (searchOpen) => set({ searchOpen }),
+  setContactsOpen: (contactsOpen) => set({ contactsOpen }),
   openLightbox: (lightboxItems, lightboxIndex) =>
     set({ lightboxOpen: true, lightboxItems, lightboxIndex }),
   closeLightbox: () => set({ lightboxOpen: false }),

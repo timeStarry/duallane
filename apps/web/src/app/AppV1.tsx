@@ -31,6 +31,7 @@ import { extractP2PRoomFromUrl } from "@/shared/lib/p2p-lane";
 import { useThemeStore } from "@/shared/theme/vibrancy";
 import { BrandLogo, Button, Input, SegmentedControl, TooltipProvider } from "@/shared/ui";
 import { CommandSearchModal } from "@/widgets/CommandSearchModal";
+import { ContactsModal } from "@/widgets/ContactsModal";
 import { ConversationSidebar } from "@/widgets/ConversationSidebar";
 import { EmoteGlobalModals } from "@/widgets/EmoteSystem";
 import { InspectorPane } from "@/widgets/InspectorPane";
@@ -736,6 +737,7 @@ export function AppV1() {
         <TimelinePane />
         <InspectorPane />
         <CommandSearchModal />
+        <ContactsModal />
         <EmoteGlobalModals />
         <SystemAnnouncementModal />
         {settingsOpen && (
