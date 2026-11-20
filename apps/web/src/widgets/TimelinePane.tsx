@@ -1430,6 +1430,7 @@ export function TimelinePane() {
   };
 
   const scrollToTimelineBottom = () => {
+    programmaticScrollLockUntilRef.current = 0;
     if (scrollRef.current) {
       scrollRef.current.scrollTo?.({
         top: scrollRef.current.scrollHeight,
