@@ -16,11 +16,12 @@ func TestEmbeddedReleaseCompatibilityPolicyIsReviewedAndBounded(t *testing.T) {
 	if policy.Version != ReleaseCompatibilityPolicyVersion || policy.BaseMigration != ReleaseCompatibilityBaseMigration {
 		t.Fatalf("unexpected embedded policy: %#v", policy)
 	}
-	if len(policy.CompatibleMigrations) != 4 ||
+	if len(policy.CompatibleMigrations) != 5 ||
 		policy.CompatibleMigrations[0].Name != ReleaseCompatibilityMigrationName || policy.CompatibleMigrations[0].SHA256 != ReleaseCompatibilityMigrationSHA256 ||
 		policy.CompatibleMigrations[1].Name != ReleaseCompatibilityMobileMigrationName || policy.CompatibleMigrations[1].SHA256 != ReleaseCompatibilityMobileMigrationSHA256 ||
 		policy.CompatibleMigrations[2].Name != ReleaseCompatibilityV1MigrationName || policy.CompatibleMigrations[2].SHA256 != ReleaseCompatibilityV1MigrationSHA256 ||
-		policy.CompatibleMigrations[3].Name != ReleaseCompatibilityAgentMigrationName || policy.CompatibleMigrations[3].SHA256 != ReleaseCompatibilityAgentMigrationSHA256 {
+		policy.CompatibleMigrations[3].Name != ReleaseCompatibilityAgentMigrationName || policy.CompatibleMigrations[3].SHA256 != ReleaseCompatibilityAgentMigrationSHA256 ||
+		policy.CompatibleMigrations[4].Name != ReleaseCompatibilityGitHubLoginEmailMigrationName || policy.CompatibleMigrations[4].SHA256 != ReleaseCompatibilityGitHubLoginEmailMigrationSHA256 {
 		t.Fatalf("unexpected compatible migration policy: %#v", policy.CompatibleMigrations)
 	}
 }
@@ -164,5 +165,38 @@ func TestAgentCompatibilityRequiresExactSchema36Bridge(t *testing.T) {
 	baseline[0] = "001_renamed.sql"
 	if policy.allowsAfter(baseline, ReleaseCompatibilityAgentMigrationName) {
 		t.Fatal("renamed baseline acquired037 authority")
+	}
+}
+
+func TestGitHubLoginEmailCompatibilityRequiresExactSchema37Bridge(t *testing.T) {
+	policy, err := EmbeddedReleaseCompatibilityPolicy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseline := append([]string(nil), canonicalReleaseCompatibilityBaseline[:]...)
+	baseline = append(baseline, ReleaseCompatibilityMigrationName, ReleaseCompatibilityMobileMigrationName,
+		ReleaseCompatibilityV1MigrationName, ReleaseCompatibilityAgentMigrationName)
+	if !policy.allowsAfter(baseline, ReleaseCompatibilityGitHubLoginEmailMigrationName) {
+		t.Fatal("reviewed schema 37 bridge must allow 038")
+	}
+	if policy.allowsAfter(baseline[:len(baseline)-1], ReleaseCompatibilityGitHubLoginEmailMigrationName) {
+		t.Fatal("schema 36 cannot claim 038")
+	}
+	old := policy
+	old.CompatibleMigrations = old.CompatibleMigrations[:4]
+	document, err := json.Marshal(old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	historical, err := ParseReleaseCompatibilityPolicy(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if historical.allowsAfter(baseline, ReleaseCompatibilityGitHubLoginEmailMigrationName) {
+		t.Fatal("historical schema 37 policy acquired 038 authority")
+	}
+	baseline[len(baseline)-1] = "037_renamed.sql"
+	if policy.allowsAfter(baseline, ReleaseCompatibilityGitHubLoginEmailMigrationName) {
+		t.Fatal("noncanonical schema 37 acquired 038 authority")
 	}
 }

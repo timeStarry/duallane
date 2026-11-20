@@ -40,6 +40,8 @@ export const REVIEWED_V1_MIGRATION = "036_v1_clean_architecture.sql";
 export const REVIEWED_V1_MIGRATION_SHA256 = "2649cdb3baf4130cee7040a492869db161dd89cae52c3afd27bc8bad922f28f4";
 export const REVIEWED_AGENT_MIGRATION = "037_agent_task_authorization.sql";
 export const REVIEWED_AGENT_MIGRATION_SHA256 = "5003a7f2c6dcc32f336a3b20f4730fa8c6e5208d6551ae7ffe460c45eca21b03";
+export const REVIEWED_GITHUB_LOGIN_EMAIL_MIGRATION = "038_github_login_email.sql";
+export const REVIEWED_GITHUB_LOGIN_EMAIL_MIGRATION_SHA256 = "a4a6b4beb053af30767ee1f874bfc3d89e3b4d6a18ad2abc08464ee9967c2664";
 
 const INSPECTION_REPORT_HEADER = "DLSCHEMA\t1";
 const INSPECTION_REPORT_END = "P_END";
@@ -906,15 +908,17 @@ function validatePolicy(input, migrations, scope) {
   if (!migrationByName.has(policy.baseMigration)) reject(`${scope}_policy_base_missing`);
   // Accept the immutable historical policy and this bridge's exact extension.
   // New SQL is still authorized only by the previous image's own declaration.
-  if (!Array.isArray(policy.compatibleMigrations) || ![1, 2, 3, 4].includes(policy.compatibleMigrations.length)) {
-    reject(`${scope}_policy_compatible_invalid`);
-  }
   const reviewed = [
     { name: REVIEWED_COMPATIBLE_MIGRATION, sha256: REVIEWED_COMPATIBLE_MIGRATION_SHA256 },
     { name: REVIEWED_MOBILE_MIGRATION, sha256: REVIEWED_MOBILE_MIGRATION_SHA256 },
     { name: REVIEWED_V1_MIGRATION, sha256: REVIEWED_V1_MIGRATION_SHA256 },
     { name: REVIEWED_AGENT_MIGRATION, sha256: REVIEWED_AGENT_MIGRATION_SHA256 },
+    { name: REVIEWED_GITHUB_LOGIN_EMAIL_MIGRATION, sha256: REVIEWED_GITHUB_LOGIN_EMAIL_MIGRATION_SHA256 },
   ];
+  if (!Array.isArray(policy.compatibleMigrations) ||
+      policy.compatibleMigrations.length === 0 || policy.compatibleMigrations.length > reviewed.length) {
+    reject(`${scope}_policy_compatible_invalid`);
+  }
 
   const compatible = [];
   const compatibleByName = new Map();
@@ -954,9 +958,7 @@ function validatePolicy(input, migrations, scope) {
       reject(`${scope}_policy_inventory_mismatch`);
     }
   }
-  // Each bridge extension is bound to the exact prior schema history. A
-  // schema-33/34/35 image cannot claim a later migration merely by carrying a
-  // longer JSON allow-list.
+  // Bind each bridge extension to the history installed in its image.
   if (compatible.length >= 2 && !migrationByName.has(REVIEWED_COMPATIBLE_MIGRATION)) {
     reject(`${scope}_policy_mobile_baseline_missing`);
   }
@@ -965,6 +967,9 @@ function validatePolicy(input, migrations, scope) {
   }
   if (compatible.length >= 4 && !migrationByName.has(REVIEWED_V1_MIGRATION)) {
     reject(`${scope}_policy_agent_baseline_missing`);
+  }
+  if (compatible.length >= 5 && !migrationByName.has(REVIEWED_AGENT_MIGRATION)) {
+    reject(`${scope}_policy_github_login_email_baseline_missing`);
   }
 
   return Object.freeze({

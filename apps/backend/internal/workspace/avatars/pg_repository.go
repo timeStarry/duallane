@@ -336,29 +336,11 @@ func findVisibleAvatar(ctx context.Context, queryer avatarQueryer, spaceID, view
 			ON so.id = u.avatar_storage_object_id AND so.deleted_at IS NULL
 		WHERE u.id = $3 AND u.kind = 'human' AND u.avatar_version = $4
 		  AND u.avatar_storage_key IS NOT NULL
-		  AND sm.space_id = $1 AND sm.removed_at IS NULL
-		  AND (
-			u.id = $2
-			OR u.search_discoverable
-			OR EXISTS (
-				SELECT 1 FROM space_members owner_sm
-				WHERE owner_sm.space_id = $1 AND owner_sm.user_id = $2
-				  AND owner_sm.role = 'owner' AND owner_sm.removed_at IS NULL
-			)
-			OR EXISTS (
-				SELECT 1
-				FROM conversations c
-				INNER JOIN conversation_members viewer_cm
-					ON viewer_cm.conversation_id = c.id AND viewer_cm.user_id = $2 AND viewer_cm.removed_at IS NULL
-				INNER JOIN conversation_members visible_cm
-					ON visible_cm.conversation_id = c.id AND visible_cm.user_id = u.id AND visible_cm.removed_at IS NULL
-				WHERE c.space_id = $1 AND c.type = 'direct'
-			)
-			OR EXISTS (
-				SELECT 1 FROM member_visibility_grants grant_row
-				WHERE grant_row.space_id = $1 AND grant_row.viewer_user_id = $2
-				  AND grant_row.visible_user_id = u.id
-			)
+		  AND sm.space_id = $1
+		  AND EXISTS (
+			SELECT 1 FROM space_members viewer_sm
+			WHERE viewer_sm.space_id = $1 AND viewer_sm.user_id = $2
+			  AND viewer_sm.removed_at IS NULL
 		  )`, spaceID, viewerID, userID, version))
 }
 

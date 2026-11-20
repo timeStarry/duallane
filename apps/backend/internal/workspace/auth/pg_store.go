@@ -699,10 +699,10 @@ func insertUser(ctx context.Context, tx pgx.Tx, userID string, profile GitHubPro
 	_, err := tx.Exec(ctx, `
 		INSERT INTO users (
 			id, github_id, github_login, email, display_name, nickname,
-			avatar_url, github_avatar_url, kind, created_at, last_login_at
+			avatar_url, github_avatar_url, kind, created_at, last_login_at, github_login_email
 		)
-		VALUES ($1, NULLIF($2, ''), $3, NULLIF($4, ''), $5, $5, NULLIF($6, ''), NULLIF($6, ''), 'human', $7, $7)
-	`, userID, profile.ID, profile.Login, profile.Email, profile.Name, profile.AvatarURL, now.UTC())
+		VALUES ($1, NULLIF($2, ''), $3, NULLIF($4, ''), $5, $5, NULLIF($6, ''), NULLIF($6, ''), 'human', $7, $7, NULLIF($8::text, ''))
+	`, userID, profile.ID, profile.Login, profile.Email, profile.Name, profile.AvatarURL, now.UTC(), profile.verifiedLoginEmail)
 	return err
 }
 
@@ -716,9 +716,10 @@ func updateUser(ctx context.Context, tx pgx.Tx, userID string, profile GitHubPro
 			display_name = COALESCE(NULLIF($5, ''), display_name),
 			github_avatar_url = COALESCE(NULLIF($6, ''), github_avatar_url),
 			avatar_url = CASE WHEN avatar_storage_key IS NULL THEN COALESCE(NULLIF($6, ''), avatar_url) ELSE avatar_url END,
-			last_login_at = $7
+			last_login_at = $7,
+			github_login_email = NULLIF(COALESCE($8::text, github_login_email), '')
 		WHERE id = $1
-	`, userID, profile.ID, profile.Login, profile.Email, profile.Name, profile.AvatarURL, now.UTC())
+	`, userID, profile.ID, profile.Login, profile.Email, profile.Name, profile.AvatarURL, now.UTC(), profile.verifiedLoginEmail)
 	return err
 }
 

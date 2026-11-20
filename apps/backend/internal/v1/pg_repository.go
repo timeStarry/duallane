@@ -194,12 +194,21 @@ func (r *PGRepository) GetBootstrap(ctx context.Context, actorID string, now tim
 	nowUTC := now.UTC()
 	quotaSince := nowUTC.Add(-24 * time.Hour)
 
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{
+		IsoLevel:   pgx.RepeatableRead,
+		AccessMode: pgx.ReadOnly,
+	})
+	if err != nil {
+		return V1BootstrapResponse{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
 	var (
 		uID, uGitHub, uDisplay, uNick, uAvatar, actorRole string
 		dailyQuotaBytes, usedTodayBytes, eventCursor      int64
 		prefsRaw, beaconPrefsRaw                          string
 	)
-	err := r.pool.QueryRow(ctx, `
+	err = tx.QueryRow(ctx, `
 		SELECT
 			u.id,
 			coalesce(u.github_login, ''),
@@ -244,7 +253,7 @@ func (r *PGRepository) GetBootstrap(ctx context.Context, actorID string, now tim
 	currentUser.Role = actorRole
 
 	botHeartbeatCutoff := nowUTC.Add(-90 * time.Second)
-	memberRows, err := r.pool.Query(ctx, `
+	memberRows, err := tx.Query(ctx, `
 		SELECT
 			u.id,
 			coalesce(u.github_login, ''),
@@ -390,7 +399,7 @@ func (r *PGRepository) GetBootstrap(ctx context.Context, actorID string, now tim
 
 	conversations := make([]V1BootstrapConversation, 0, 16)
 	if canReadConversations {
-		convRows, err := r.pool.Query(ctx, `
+		convRows, err := tx.Query(ctx, `
 			WITH user_convs AS (
 				SELECT
 					c.id AS conversation_id,
@@ -452,7 +461,7 @@ func (r *PGRepository) GetBootstrap(ctx context.Context, actorID string, now tim
 				END AS last_sender_name,
 				latest.created_at AS last_msg_at,
 				coalesce(all_latest.created_at, cm.created_at) AS last_activity_at,
-				unread.count, unread.first_message_id, cm.last_read_message_id, cm.last_read_at, cm.last_read_seq,
+				unread.count, unread.mention_count, unread.first_message_id, cm.last_read_message_id, cm.last_read_at, cm.last_read_seq,
 				GREATEST(
 					(SELECT MAX(cm_peer.last_read_at)
 					 FROM conversation_members cm_peer
@@ -463,6 +472,8 @@ func (r *PGRepository) GetBootstrap(ctx context.Context, actorID string, now tim
 					 FROM messages m_peer
 					 WHERE m_peer.conversation_id = cm.conversation_id
 					   AND m_peer.space_id = $1
+					   AND m_peer.topic_id IS NULL
+					   AND (m_peer.thread_root_id IS NULL OR m_peer.also_send_to_channel = TRUE)
 					   AND m_peer.deleted_at IS NULL
 					   AND m_peer.kind <> 'system'
 					   AND m_peer.author_id IS NOT NULL
@@ -533,6 +544,7 @@ func (r *PGRepository) GetBootstrap(ctx context.Context, actorID string, now tim
 				&lastMsgAt,
 				&activity,
 				&c.UnreadCount,
+				&c.MentionCount,
 				&c.FirstUnreadMessageID,
 				&c.LastReadMessageID,
 				&lastReadAt,
@@ -617,7 +629,7 @@ func (r *PGRepository) GetBootstrap(ctx context.Context, actorID string, now tim
 		}
 
 		if len(convIDs) > 0 {
-			cmRows, err := r.pool.Query(ctx, `
+			cmRows, err := tx.Query(ctx, `
 				SELECT cm.conversation_id, cm.user_id
 				FROM conversation_members cm
 				JOIN space_members sm ON sm.space_id = $1 AND sm.user_id = cm.user_id AND sm.removed_at IS NULL
@@ -656,7 +668,7 @@ func (r *PGRepository) GetBootstrap(ctx context.Context, actorID string, now tim
 				}
 			}
 
-			pinRows, err := r.pool.Query(ctx, `
+			pinRows, err := tx.Query(ctx, `
 				SELECT p.conversation_id, p.message_id
 				FROM conversation_pinned_messages p
 				JOIN messages m ON m.id = p.message_id
@@ -2158,11 +2170,11 @@ func (r *PGRepository) MarkConversationRead(ctx context.Context, actorID, conver
 	var result ConversationReadResult
 	var readAt *time.Time
 	if err := tx.QueryRow(ctx, `
-		SELECT cm.last_read_message_id, cm.last_read_at, cm.last_read_seq, unread.count, unread.first_message_id
+		SELECT cm.last_read_message_id, cm.last_read_at, cm.last_read_seq, unread.count, unread.mention_count, unread.first_message_id
 		FROM conversation_members cm
 		CROSS JOIN LATERAL (`+workspaceConversations.TimelineUnreadSQL+`) unread
 		WHERE cm.conversation_id = $2 AND cm.user_id = $3 AND cm.removed_at IS NULL
-	`, r.spaceID, conversationID, actorID).Scan(&result.LastReadMessageID, &readAt, &result.LastReadSeq, &result.UnreadCount, &result.FirstUnreadMessageID); err != nil {
+	`, r.spaceID, conversationID, actorID).Scan(&result.LastReadMessageID, &readAt, &result.LastReadSeq, &result.UnreadCount, &result.MentionCount, &result.FirstUnreadMessageID); err != nil {
 		return ConversationReadResult{}, err
 	}
 	result.ReadAt = now.UTC().Format(time.RFC3339Nano)
@@ -2204,20 +2216,6 @@ func (r *PGRepository) SendConversationTyping(ctx context.Context, actorID, conv
 	if userKind == "bot" || kind == "bot" {
 		resolvedKind = "bot"
 		ttl = 6500 * time.Millisecond
-		readAt := now.UTC()
-		readTag, readErr := tx.Exec(ctx, `
-			UPDATE conversation_members
-			SET last_read_at = GREATEST(COALESCE(last_read_at, $1), $1)
-			WHERE conversation_id = $2 AND user_id = $3 AND removed_at IS NULL
-			  AND (last_read_at IS NULL OR last_read_at < $1)
-		`, readAt, conversationID, actorID)
-		if readErr == nil && readTag.RowsAffected() > 0 {
-			_ = emitWorkspaceEventTx(ctx, tx, r.spaceID, actorID, conversationID, "conversation.read", "conversation", conversationID, map[string]any{
-				"conversationId": conversationID,
-				"userId":         actorID,
-				"readAt":         readAt.Format(time.RFC3339Nano),
-			}, readAt)
-		}
 	}
 
 	expiresAt := now.UTC().Add(ttl).Format(time.RFC3339Nano)
@@ -3972,11 +3970,48 @@ func (r *PGRepository) FindBoundEmailOwner(ctx context.Context, normalizedEmail 
 	return userID, nil
 }
 
+// Prefer explicit bindings. An ambiguous address at the best priority cannot
+// select an account. Use the same policy when creating and redeeming a code.
+const emailLoginOwnerSQL = `
+	SELECT id FROM (
+		SELECT u.id, count(*) OVER (PARTITION BY (bound.address IS NOT NULL)) AS matches
+		FROM space_members sm
+		JOIN users u ON u.id = sm.user_id
+		LEFT JOIN user_preferences up ON up.user_id = u.id
+		CROSS JOIN LATERAL (SELECT NULLIF(lower(btrim(up.prefs_json::jsonb ->> 'boundEmail')), '') AS address) bound
+		WHERE sm.space_id = $1 AND sm.removed_at IS NULL AND u.kind = 'human'
+		  AND (bound.address = $2 OR (bound.address IS NULL AND u.github_id IS NOT NULL AND u.github_login_email = $2))
+		ORDER BY (bound.address IS NOT NULL) DESC
+		LIMIT 1
+	) candidate WHERE matches = 1
+`
+
+type emailChallengeQueryer interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
+func findEmailLoginOwner(ctx context.Context, queryer emailChallengeQueryer, spaceID, normalizedEmail string) (string, error) {
+	var userID string
+	err := queryer.QueryRow(ctx, emailLoginOwnerSQL, spaceID, normalizedEmail).Scan(&userID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	return userID, err
+}
+
+func (r *PGRepository) FindEmailLoginOwner(ctx context.Context, normalizedEmail string) (string, error) {
+	return findEmailLoginOwner(ctx, r.pool, r.spaceID, normalizedEmail)
+}
+
 func (r *PGRepository) CheckEmailChallengeCooldown(ctx context.Context, userID string, now time.Time) error {
+	return checkEmailChallengeCooldown(ctx, r.pool, userID, now)
+}
+
+func checkEmailChallengeCooldown(ctx context.Context, queryer emailChallengeQueryer, userID string, now time.Time) error {
 	nowUTC := now.UTC()
 	var count int
 	var latest *time.Time
-	err := r.pool.QueryRow(ctx, `
+	err := queryer.QueryRow(ctx, `
 		SELECT COUNT(*), MAX(created_at)
 		FROM notification_email_challenges
 		WHERE user_id = $1 AND created_at >= $2
@@ -4005,6 +4040,20 @@ func (r *PGRepository) SaveEmailChallenge(ctx context.Context, challengeID, user
 		prefix = "echl_bind_%"
 	} else if strings.HasPrefix(challengeID, "echl_login_") {
 		prefix = "echl_login_%"
+		// Serialize reservations before sending so concurrent requests share the cooldown.
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, "duallane:login-email:"+userID); err != nil {
+			return err
+		}
+		selected, err := findEmailLoginOwner(ctx, tx, r.spaceID, normalizedEmail)
+		if err != nil {
+			return err
+		}
+		if selected != userID {
+			return ErrChallengeInvalid
+		}
+		if err := checkEmailChallengeCooldown(ctx, tx, userID, now); err != nil {
+			return err
+		}
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE notification_email_challenges
@@ -4247,15 +4296,11 @@ func (r *PGRepository) ResolveEmailLoginMember(ctx context.Context, userID, norm
 			coalesce(u.nickname, ''),
 			coalesce(u.avatar_url, ''),
 			sm.role
-		FROM space_members sm
-		JOIN users u ON u.id = sm.user_id
-		JOIN user_preferences up ON up.user_id = u.id
-		WHERE sm.space_id = $1
-		  AND sm.user_id = $2
-		  AND sm.removed_at IS NULL
-		  AND u.kind = 'human'
-		  AND lower(coalesce((up.prefs_json::jsonb ->> 'boundEmail'), '')) = $3
-	`, r.spaceID, userID, normalized).Scan(&uID, &uGitHub, &uDisplay, &uNick, &uAvatar, &role)
+		FROM (`+emailLoginOwnerSQL+`) selected
+		JOIN users u ON u.id = selected.id
+		JOIN space_members sm ON sm.space_id = $1 AND sm.user_id = u.id
+		WHERE selected.id = $3
+	`, r.spaceID, normalized, userID).Scan(&uID, &uGitHub, &uDisplay, &uNick, &uAvatar, &role)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return V1BootstrapMember{}, ErrChallengeInvalid
 	}

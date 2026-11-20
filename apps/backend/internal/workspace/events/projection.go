@@ -63,6 +63,7 @@ func (r *PGRepository) ProjectEventPayload(ctx context.Context, actor *auth.Acto
 			}
 			if record != nil {
 				projected["unreadCount"] = record.UnreadCount
+				projected["mentionCount"] = record.MentionCount
 				projected["firstUnreadMessageId"] = nil
 				if record.FirstUnreadMessageID != nil {
 					projected["firstUnreadMessageId"] = *record.FirstUnreadMessageID

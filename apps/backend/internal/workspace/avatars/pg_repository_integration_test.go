@@ -434,44 +434,17 @@ func TestPGAvatarLifecycleUsesIsolatedSchemaAndAtomicStorageCleanup(t *testing.T
 		t.Fatalf("canonical content = %q type=%q err=%v", content, opened.ContentType, readErr)
 	}
 
+	// Space-level avatar authorization: any active member of the same space can
+	// load another space member's versioned avatar without needing a DM or grant.
 	if _, err := fixture.service.GetProfileAvatar(fixture.ctx, GetProfileAvatarInput{
 		ActorID: viewer, UserID: member, Version: memberRecord.Version,
+	}); err != nil {
+		t.Fatalf("same-space member avatar: %v", err)
+	}
+	if _, err := fixture.service.GetProfileAvatar(fixture.ctx, GetProfileAvatarInput{
+		ActorID: viewer, UserID: member, Version: "wrong-version",
 	}); !isAvatarCode(err, CodeAvatarNotFound) {
-		t.Fatalf("hidden member avatar error = %v", err)
-	}
-	mustExecPGAvatar(t, fixture.ctx, fixture.conn, `
-		INSERT INTO member_visibility_grants (space_id, viewer_user_id, visible_user_id, created_by, created_at)
-		VALUES ($1, $2, $3, $4, $5)
-	`, DefaultSpaceID, viewer, member, owner, fixture.now)
-	if _, err := fixture.service.GetProfileAvatar(fixture.ctx, GetProfileAvatarInput{
-		ActorID: viewer, UserID: member, Version: memberRecord.Version,
-	}); err != nil {
-		t.Fatalf("granted member avatar: %v", err)
-	}
-	mustExecPGAvatar(t, fixture.ctx, fixture.conn, `
-		DELETE FROM member_visibility_grants
-		WHERE space_id = $1 AND viewer_user_id = $2 AND visible_user_id = $3
-	`, DefaultSpaceID, viewer, member)
-	mustExecPGAvatar(t, fixture.ctx, fixture.conn, `
-		INSERT INTO conversations (id, space_id, type, title, direct_key, created_by, created_at)
-		VALUES ($1, $2, 'direct', 'Avatar direct', $3, $4, $5)
-	`, "conv_avatar_direct", DefaultSpaceID, "avatar-direct", viewer, fixture.now)
-	for _, userID := range []string{viewer, member} {
-		mustExecPGAvatar(t, fixture.ctx, fixture.conn, `
-			INSERT INTO conversation_members (conversation_id, user_id, joined_at)
-			VALUES ($1, $2, $3)
-		`, "conv_avatar_direct", userID, fixture.now)
-	}
-	if _, err := fixture.service.GetProfileAvatar(fixture.ctx, GetProfileAvatarInput{
-		ActorID: viewer, UserID: member, Version: memberRecord.Version,
-	}); err != nil {
-		t.Fatalf("direct-contact member avatar: %v", err)
-	}
-	mustExecPGAvatar(t, fixture.ctx, fixture.conn, `UPDATE users SET search_discoverable = TRUE WHERE id = $1`, member)
-	if _, err := fixture.service.GetProfileAvatar(fixture.ctx, GetProfileAvatarInput{
-		ActorID: viewer, UserID: member, Version: memberRecord.Version,
-	}); err != nil {
-		t.Fatalf("discoverable member avatar: %v", err)
+		t.Fatalf("mismatched avatar version error = %v", err)
 	}
 
 	if got := pgAvatarCount(t, fixture, `SELECT COUNT(*) FROM workspace_events WHERE type = 'workspace.member_updated'`); got != 2 {

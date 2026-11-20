@@ -447,13 +447,13 @@ const memberSelect = `SELECT
 	u.id, u.github_login, u.display_name, u.nickname, ur.remark, u.avatar_url,
 	u.search_discoverable, u.recall_reason, u.kind, sm.role, sm.joined_at,
 	(
-		EXISTS (SELECT 1 FROM space_members viewer_sm WHERE viewer_sm.space_id = $1 AND viewer_sm.user_id = $2 AND viewer_sm.role = 'owner' AND viewer_sm.removed_at IS NULL)
+		EXISTS (SELECT 1 FROM space_members viewer_sm WHERE viewer_sm.space_id = $1 AND viewer_sm.user_id = $2 AND viewer_sm.role IN ('owner', 'admin') AND viewer_sm.removed_at IS NULL)
 		OR u.id = $2
 		OR EXISTS (
 			SELECT 1 FROM conversations c
 			INNER JOIN conversation_members viewer_cm ON viewer_cm.conversation_id = c.id AND viewer_cm.user_id = $2 AND viewer_cm.removed_at IS NULL
 			INNER JOIN conversation_members visible_cm ON visible_cm.conversation_id = c.id AND visible_cm.user_id = u.id AND visible_cm.removed_at IS NULL
-			WHERE c.space_id = $1 AND c.type = 'direct'
+			WHERE c.space_id = $1 AND c.type IN ('direct', 'group')
 		)
 		OR EXISTS (SELECT 1 FROM member_visibility_grants g WHERE g.space_id = $1 AND g.viewer_user_id = $2 AND g.visible_user_id = u.id)
 		OR u.id = ANY($3::text[])

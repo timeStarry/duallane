@@ -102,6 +102,19 @@ func TestPGStoreAuthenticationAndSessionLifecycle(t *testing.T) {
 		IDFactory:  idFactory,
 		SessionTTL: time.Hour,
 	})
+	assertLoginEmail := func(userID string, want *string) {
+		t.Helper()
+		var stored *string
+		if err := pool.QueryRow(ctx, "SELECT github_login_email FROM users WHERE id = $1", userID).Scan(&stored); err != nil {
+			t.Fatal(err)
+		}
+		if (stored == nil) != (want == nil) {
+			t.Fatalf("stored login email exists = %v, want %v", stored != nil, want != nil)
+		}
+		if stored != nil && *stored != *want {
+			t.Fatalf("stored login email = %q, want %q", *stored, *want)
+		}
+	}
 	if err := service.RecordInviteAcceptRejection(ctx, CodeGitHubRequired, RequestMeta{RequestID: "invite-github-required", IPAddress: "203.0.113.9"}); err != nil {
 		t.Fatal(err)
 	}
@@ -126,6 +139,7 @@ func TestPGStoreAuthenticationAndSessionLifecycle(t *testing.T) {
 	if owner.ID != SeededOwnerID || owner.Role != "owner" {
 		t.Fatalf("owner = %#v", owner)
 	}
+	assertLoginEmail(owner.ID, nil)
 
 	session, err := service.CreateSession(ctx, owner.ID)
 	if err != nil {
@@ -159,18 +173,45 @@ func TestPGStoreAuthenticationAndSessionLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	member, err := service.AuthenticateGitHub(ctx, GitHubProfile{
-		ID:    "2002",
-		Login: "invited-member",
-		Email: "member@example.com",
-		Name:  "Invited Member",
-	}, inviteCode, RequestMeta{RequestID: "invite-success"})
+	primaryEmail := "primary@example.com"
+	memberProfile := GitHubProfile{
+		ID:                 "2002",
+		Login:              "invited-member",
+		Email:              "member@example.com",
+		Name:               "Invited Member",
+		verifiedLoginEmail: &primaryEmail,
+	}
+	member, err := service.AuthenticateGitHub(ctx, memberProfile, inviteCode, RequestMeta{RequestID: "invite-success"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if member.Role != "member" || member.Kind != "human" {
 		t.Fatalf("member = %#v", member)
 	}
+	if member.Email != memberProfile.Email {
+		t.Fatalf("actor profile email = %q, want %q", member.Email, memberProfile.Email)
+	}
+	assertLoginEmail(member.ID, &primaryEmail)
+
+	updatedPrimaryEmail := "new-primary@example.com"
+	memberProfile.verifiedLoginEmail = &updatedPrimaryEmail
+	if _, err := service.AuthenticateGitHub(ctx, memberProfile, ""); err != nil {
+		t.Fatal(err)
+	}
+	assertLoginEmail(member.ID, &updatedPrimaryEmail)
+
+	memberProfile.verifiedLoginEmail = nil
+	if _, err := service.AuthenticateGitHub(ctx, memberProfile, ""); err != nil {
+		t.Fatal(err)
+	}
+	assertLoginEmail(member.ID, &updatedPrimaryEmail)
+
+	noEligibleEmail := ""
+	memberProfile.verifiedLoginEmail = &noEligibleEmail
+	if _, err := service.AuthenticateGitHub(ctx, memberProfile, ""); err != nil {
+		t.Fatal(err)
+	}
+	assertLoginEmail(member.ID, nil)
 
 	var uses int
 	if err := pool.QueryRow(ctx, "SELECT uses FROM invites WHERE id = 'invite-integration'").Scan(&uses); err != nil {

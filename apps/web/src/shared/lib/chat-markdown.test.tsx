@@ -253,7 +253,7 @@ describe("Sidebar Preview, Notification Levels, Display Prefs & v1 Profile/Remar
       )
     ).toBe("我: 明早对齐");
 
-    // Global unread excludes muted conversations unless mentionCount > 0
+    // Global unread counts all unread for "all", only mentionCount for "mentions", and 0 for "muted"
     const alertTotal = computeGlobalAlertUnreadCount({
       c_normal: {
         id: "c_normal",
@@ -264,6 +264,16 @@ describe("Sidebar Preview, Notification Levels, Display Prefs & v1 Profile/Remar
         pinnedMessageIds: [],
         memberIds: [],
         notificationLevel: "all",
+      },
+      c_mentions_only: {
+        id: "c_mentions_only",
+        kind: "group",
+        title: "仅@我群",
+        unreadCount: 9,
+        mentionCount: 2,
+        pinnedMessageIds: [],
+        memberIds: [],
+        notificationLevel: "mentions",
       },
       c_muted_no_mention: {
         id: "c_muted_no_mention",

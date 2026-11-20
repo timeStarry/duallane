@@ -55,6 +55,7 @@ type Conversation struct {
 	LastMessagePlainText string                   `json:"lastMessagePlainText"`
 	LastMessageAt        *string                  `json:"lastMessageAt"`
 	UnreadCount          int64                    `json:"unreadCount"`
+	MentionCount         int64                    `json:"mentionCount"`
 	FirstUnreadMessageID *string                  `json:"firstUnreadMessageId"`
 	LastReadMessageID    *string                  `json:"lastReadMessageId"`
 	LastReadAt           *string                  `json:"lastReadAt"`
@@ -93,6 +94,7 @@ type ConversationRecord struct {
 	LastActivityAt       time.Time
 	MessageCount         int64
 	UnreadCount          int64
+	MentionCount         int64
 	FirstUnreadMessageID *string
 	LastReadMessageID    *string
 	LastReadAt           *time.Time

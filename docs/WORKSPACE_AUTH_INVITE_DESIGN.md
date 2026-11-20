@@ -19,7 +19,8 @@ members.
 
 ## 2. Principles
 
-- The public Workspace page has one primary action: `使用 GitHub 登录`.
+- `使用 GitHub 登录` handles Workspace admission and identity synchronization.
+- Existing members can also choose `邮箱验证码` to sign in.
 - Invite codes are created only after login by owner/admin members.
 - Invite validation happens after GitHub identity is known.
 - A user who is not invited gets a clear access state, not OAuth or database
@@ -35,7 +36,7 @@ Visible:
 
 - Product label: `共享空间`.
 - Short copy: `和熟人或小组长期共享聊天与文件。`
-- Primary button: `使用 GitHub 登录`.
+- Sign-in choices are `使用 GitHub 登录` and `邮箱验证码`.
 - Small note: `需要已有成员邀请后才能进入。`
 - Optional secondary action: return to lane choice.
 
@@ -58,7 +59,7 @@ entry screen for people who already have access or have received an invite link.
 | State | Meaning | Product behavior |
 | --- | --- | --- |
 | `workspace_disabled` | `WORKSPACE_ENABLED` is not true | Show `共享空间暂未开放。` and a return action. |
-| `needs_login` | No valid session | Show GitHub login only. |
+| `needs_login` | No valid session | Offer GitHub login and email verification. |
 | `oauth_pending` | OAuth flow started | Keep page stable and show compact loading. |
 | `owner_bootstrap` | Seeded owner identity matched | Create/bind owner session and enter. |
 | `invite_pending` | Invite code is present but identity not known | Start/continue GitHub login; do not expose invite internals. |
@@ -235,6 +236,28 @@ manual-code entry can be added inside a focused access recovery flow, but it
 should not become the default public registration pattern.
 
 ## 10. Session Model
+
+### Existing Member Email Login
+
+- A verified, manually bound login address takes priority. Without a binding,
+  the account can use its verified GitHub primary email from its most recent
+  successful email-list sync during OAuth. A GitHub `noreply` address cannot
+  receive a code. [GitHub authenticated email API](https://docs.github.com/en/rest/users/emails#list-email-addresses-for-the-authenticated-user)
+- An older account with no trusted email record gets its default the next time
+  it signs in through GitHub. Changing the primary email in GitHub takes effect
+  in DualLane after the next successful sync.
+- Only a current human member of the space can sign in by email. The server
+  accepts a unique current account at the best matching priority. An address
+  shared by multiple eligible accounts at that priority gets no code.
+- Both Web and Android use a short-lived, single-use code. A code is tied to the
+  destination and account selected at issuance. Verification checks the current
+  address and membership again before issuing a session. The public send-code
+  response has the same shape for any valid email address.
+- Personal settings show a manually bound address in the binding controls.
+  Removing that binding restores the eligible GitHub default. Email login
+  eligibility does not subscribe the account to email notifications.
+
+### Session Behavior
 
 Session behavior:
 

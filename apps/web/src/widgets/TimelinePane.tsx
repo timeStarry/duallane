@@ -104,7 +104,7 @@ import { isReadAnchor, resolveReturnUnread, unreadMessage } from "@/entities/wor
 
 const GROUP_WINDOW_MS = 5 * 60 * 1000;
 const HUGE_PASTE_CHAR_THRESHOLD = 6000;
-const TIMELINE_BOTTOM_DISTANCE = 12;
+const TIMELINE_BOTTOM_DISTANCE = 48;
 const EMPTY_MESSAGES: V1Message[] = [];
 const EMPTY_INCOMING_IDS: readonly string[] = [];
 const useIsomorphicLayoutEffect =
@@ -197,13 +197,16 @@ export function TimelinePane() {
     connectionStatus,
     liveIncomingIdsByConv,
     messagesByConv,
+    hasMoreBeforeByConv,
+    loadingOlderByConv,
     highlightedMessageId,
     drafts,
     editingMessageId,
     typingByConv,
     recalledDrafts,
     setDraft,
-    setScrollTop,
+    loadOlderMessages,
+    loadMessagesAround,
     markVisibleConversationRead,
     setEditingMessageId,
     sendWorkspaceMessage,
@@ -213,6 +216,7 @@ export function TimelinePane() {
     togglePinMessage,
     forwardMessage,
     jumpToMessage,
+    clearHighlightedMessage,
     triggerCardAction,
     setMemberRemark,
     p2pRoom,
@@ -290,10 +294,11 @@ export function TimelinePane() {
   const [returnUnread, setReturnUnread] = useState<(ReturnType<typeof resolveReturnUnread> & { revision: number }) | null>(null);
   const [compactViewport, setCompactViewport] = useState(() => typeof window !== "undefined" && Boolean(window.matchMedia?.("(max-width: 760px)").matches));
   const chatVisible = activeLane === "workspace" && entryView === "workspace" && (!compactViewport || mobileView === "chat");
-  const canReadTimeline = chatVisible && foreground && !inspectorOpen && !settingsOpen &&
+  const canReadTimeline = chatVisible && foreground && !(compactViewport && inspectorOpen) && !settingsOpen &&
     !adminConsoleOpen && !searchOpen && !lightboxOpen;
   const entryRevisionRef = useRef<number | undefined>(undefined);
   const seenIncomingIdsRef = useRef(new Set<string>());
+  const programmaticScrollLockUntilRef = useRef(0);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const timelineContentRef = useRef<HTMLDivElement | null>(null);
   const pinnedConvRef = useRef<{ convId: string | null; populated: boolean }>({
@@ -795,7 +800,7 @@ export function TimelinePane() {
     return () => observer.disconnect();
   }, [activeLane, p2pRoom?.roomId, hasP2PMessages]);
 
-  // Auto-scroll to highlighted message when jumping from Search / Pin / File backlink
+  // Auto-scroll to highlighted message when jumping from Search / Pin / File backlink / Return-Unread
   useEffect(() => {
     if (!highlightedMessageId || !scrollRef.current) return;
     const escapedId =
@@ -804,9 +809,16 @@ export function TimelinePane() {
         : highlightedMessageId.replace(/["\\]/g, "\\$&");
     const el = scrollRef.current.querySelector(`[data-message-id="${escapedId}"]`);
     if (el) {
+      isNearBottomRef.current = false;
+      setIsNearBottom(false);
+      programmaticScrollLockUntilRef.current = Date.now() + 800;
       el.scrollIntoView({ behavior: "smooth", block: "center" });
+      const timer = window.setTimeout(() => {
+        clearHighlightedMessage();
+      }, 2400);
+      return () => window.clearTimeout(timer);
     }
-  }, [highlightedMessageId, messages]);
+  }, [highlightedMessageId, messages, clearHighlightedMessage]);
 
   if (activeLane === "p2p") {
     const peerStatusLabel = p2pRoom
@@ -1779,19 +1791,32 @@ export function TimelinePane() {
         <div className="absolute left-0 right-0 top-20 z-20 flex justify-center px-4 pointer-events-none">
           <div className="pointer-events-auto dl-glass-elevated flex min-w-0 items-center rounded-full border border-dl-border-hairline shadow-sm">
             <Button type="button" variant="ghost" size="sm" data-testid="return-unread-banner"
-              disabled={!returnBoundaryId || activeEntry.history !== "ready"}
+              disabled={(!returnBoundaryId && !activeEntry.firstUnreadMessageId) || activeEntry.history !== "ready"}
               onClick={() => {
                 const timeline = scrollRef.current;
                 const target = timeline?.querySelector<HTMLElement>('[data-testid="timeline-unread-divider"]');
-                if (!target || !timeline) return;
-                const offset = target.getBoundingClientRect().top - timeline.getBoundingClientRect().top;
-                const top = Math.max(0, timeline.scrollTop + offset - TIMELINE_BOTTOM_DISTANCE);
-                const near = timeline.scrollHeight - timeline.clientHeight - top <= TIMELINE_BOTTOM_DISTANCE;
-                isNearBottomRef.current = near;
-                setIsNearBottom(near);
-                timeline.scrollTo({ top,
-                  behavior: window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
-                setDismissedUnreadRevision(activeEntry.revision);
+                if (target && timeline) {
+                  const offset = target.getBoundingClientRect().top - timeline.getBoundingClientRect().top;
+                  const top = Math.max(0, timeline.scrollTop + offset - 16);
+                  const near = timeline.scrollHeight - timeline.clientHeight - top <= TIMELINE_BOTTOM_DISTANCE;
+                  isNearBottomRef.current = near;
+                  setIsNearBottom(near);
+                  programmaticScrollLockUntilRef.current = Date.now() + 750;
+                  timeline.scrollTo({
+                    top,
+                    behavior: window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
+                  });
+                  setDismissedUnreadRevision(activeEntry.revision);
+                  return;
+                }
+                if (activeEntry.firstUnreadMessageId) {
+                  setDismissedUnreadRevision(activeEntry.revision);
+                  void loadMessagesAround(activeConv.id, activeEntry.firstUnreadMessageId).then((found) => {
+                    if (found && activeEntry.firstUnreadMessageId) {
+                      jumpToMessage(activeConv.id, activeEntry.firstUnreadMessageId);
+                    }
+                  });
+                }
               }}
               className="min-h-11 min-w-0 gap-1.5 rounded-full px-4 text-xs font-medium text-dl-lane-shared tabular-nums whitespace-normal"
               aria-label={`向上查看 ${activeEntry.unreadCount} 条新消息${returnWindowDetail ? `，${returnWindowDetail}` : ""}`}>
@@ -1808,11 +1833,29 @@ export function TimelinePane() {
         data-testid="workspace-timeline-scroll"
         onScroll={(e) => {
           const el = e.currentTarget;
-          setScrollTop(activeConv.id, el.scrollTop);
           const near = atTimelineBottom(el);
-          isNearBottomRef.current = near;
-          setIsNearBottom(near);
-          if (near && canReadTimeline) seenIncomingIdsRef.current = new Set(liveIncomingIds);
+          if (Date.now() >= programmaticScrollLockUntilRef.current || !near) {
+            isNearBottomRef.current = near;
+            setIsNearBottom(near);
+            if (near && canReadTimeline) seenIncomingIdsRef.current = new Set(liveIncomingIds);
+          }
+          if (
+            el.scrollTop < 120 &&
+            hasMoreBeforeByConv[activeConv.id] !== false &&
+            !loadingOlderByConv[activeConv.id] &&
+            messages.length >= 20
+          ) {
+            const prevHeight = el.scrollHeight;
+            const prevTop = el.scrollTop;
+            void loadOlderMessages(activeConv.id).then((added) => {
+              if (added > 0 && scrollRef.current) {
+                const delta = scrollRef.current.scrollHeight - prevHeight;
+                if (delta > 0) {
+                  scrollRef.current.scrollTop = prevTop + delta;
+                }
+              }
+            });
+          }
         }}
         className="dl-scroll flex-1 overflow-y-auto overflow-x-hidden min-w-0 px-5 max-compact:px-3 py-4"
       >
