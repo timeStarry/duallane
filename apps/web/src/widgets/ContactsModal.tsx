@@ -3,7 +3,7 @@ import { Bot, MessageSquare, Pencil, Search, Users, X } from "lucide-react";
 import { useLaneStore } from "@/entities/lane/store";
 import { useWorkspaceStore, type V1User } from "@/entities/workspace/store";
 import { apiV1 } from "@/shared/lib/api-v1";
-import { Avatar, Button, Dialog, DialogContent, DialogHeader, DialogTitle, Input } from "@/shared/ui";
+import { Avatar, Button, Dialog, DialogContent, DialogHeader, DialogTitle, IconButton, Input } from "@/shared/ui";
 
 function isBotMember(member: V1User): boolean {
   return (
@@ -132,14 +132,15 @@ export function ContactsModal() {
               className="h-9 pl-8 pr-8 text-xs"
             />
             {query && (
-              <button
-                type="button"
-                aria-label="清除搜索"
+              <IconButton
+                variant="ghost"
+                size="sm"
+                label="清除搜索"
                 onClick={() => setQuery("")}
-                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-dl-text-tertiary hover:text-dl-text-primary"
+                className="absolute right-1.5 top-1/2 -translate-y-1/2 h-6 w-6 text-dl-text-tertiary hover:text-dl-text-primary"
               >
                 <X className="size-3.5" />
-              </button>
+              </IconButton>
             )}
           </div>
         </div>
@@ -330,16 +331,17 @@ export function ContactsModal() {
               </div>
               <div className="space-y-1">
                 {groups.map((group) => (
-                  <button
+                  <Button
                     key={group.id}
                     type="button"
+                    variant="ghost"
                     onClick={() => {
                       setActiveLane("workspace");
                       selectConversation(group.id);
                       setMobileView("chat");
                       setContactsOpen(false);
                     }}
-                    className="flex w-full items-center gap-2.5 rounded-xl border border-dl-border-hairline/70 bg-dl-surface-subtle/35 px-3 py-2 text-left transition-colors hover:bg-dl-surface-subtle"
+                    className="h-auto w-full justify-start gap-2.5 rounded-xl border border-dl-border-hairline/70 bg-dl-surface-subtle/35 px-3 py-2 text-left font-normal transition-colors hover:bg-dl-surface-subtle"
                   >
                     <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-dl-lane-shared/12 text-sm">
                       {group.avatarEmoji || "👥"}
@@ -352,7 +354,7 @@ export function ContactsModal() {
                         {group.memberIds.length} 位成员
                       </div>
                     </div>
-                  </button>
+                  </Button>
                 ))}
               </div>
             </section>
