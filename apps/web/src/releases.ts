@@ -13,6 +13,21 @@ export type DualLaneRelease = {
 
 export const DUAL_LANE_RELEASES: DualLaneRelease[] = [
   {
+    version: "1.2.5",
+    releasedAt: "2026-11-20",
+    title: "支持使用已验证 GitHub 邮箱默认登录",
+    summary: "已通过 GitHub 登录后，可直接使用已验证的 GitHub 主邮箱接收验证码登录，无需重复手动绑定。",
+    categories: [
+      {
+        title: "账号与登录",
+        items: [
+          "通过 GitHub 登录后自动记录已验证的主邮箱，可直接用于邮箱验证码登录",
+          "在账号设置中仍可随时绑定或更换个人常用登录邮箱"
+        ]
+      }
+    ]
+  },
+  {
     version: "1.2.4",
     releasedAt: "2026-11-20",
     title: "统一未读红点、修复头像显示与新增网页通讯录",
