@@ -140,17 +140,79 @@ func (s *Service) SyncDelta(ctx context.Context, actorID string, sinceSeq int64)
 }
 
 func (s *Service) Search(ctx context.Context, actorID, query, scope string) (SearchResponse, error) {
+	return s.SearchWithOptions(ctx, actorID, SearchOptions{
+		Query: query,
+		Scope: scope,
+		Limit: 50,
+	})
+}
+
+func (s *Service) SearchWithOptions(ctx context.Context, actorID string, opts SearchOptions) (SearchResponse, error) {
 	if strings.TrimSpace(actorID) == "" {
 		return SearchResponse{}, ErrForbidden
 	}
-	q := strings.TrimSpace(query)
-	if len(q) == 0 {
+	q := strings.TrimSpace(opts.Query)
+	if len(q) == 0 && strings.TrimSpace(opts.SenderID) == "" {
 		return SearchResponse{Messages: []SearchMessageHit{}, Files: []SearchFileHit{}}, nil
 	}
+	scope := strings.TrimSpace(opts.Scope)
 	if scope == "" {
 		scope = "all"
 	}
-	return s.repo.Search(ctx, actorID, q, scope, 50)
+	limit := opts.Limit
+	if limit <= 0 {
+		limit = 40
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	offset := opts.Offset
+	if offset < 0 {
+		offset = 0
+	}
+	clean := SearchOptions{
+		Query:          q,
+		Scope:          scope,
+		ConversationID: strings.TrimSpace(opts.ConversationID),
+		SenderID:       strings.TrimSpace(opts.SenderID),
+		Limit:          limit,
+		Offset:         offset,
+	}
+	if adv, ok := s.repo.(interface {
+		SearchWithOptions(ctx context.Context, actorID string, opts SearchOptions) (SearchResponse, error)
+	}); ok {
+		return adv.SearchWithOptions(ctx, actorID, clean)
+	}
+	return s.repo.Search(ctx, actorID, clean.Query, clean.Scope, clean.Limit)
+}
+
+func (s *Service) ListConversationMedia(ctx context.Context, actorID, conversationID, kind string, limit, offset int) (ConversationMediaResponse, error) {
+	actorID = strings.TrimSpace(actorID)
+	conversationID = strings.TrimSpace(conversationID)
+	if actorID == "" {
+		return ConversationMediaResponse{}, ErrForbidden
+	}
+	if conversationID == "" {
+		return ConversationMediaResponse{}, ErrInvalidInput
+	}
+	if kind != "image" && kind != "file" {
+		kind = "all"
+	}
+	if limit <= 0 {
+		limit = 40
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	if mediaRepo, ok := s.repo.(interface {
+		ListConversationMedia(ctx context.Context, actorID, conversationID, kind string, limit, offset int) (ConversationMediaResponse, error)
+	}); ok {
+		return mediaRepo.ListConversationMedia(ctx, actorID, conversationID, kind, limit, offset)
+	}
+	return ConversationMediaResponse{Items: []SearchFileHit{}, HasMore: false}, nil
 }
 
 func (s *Service) GetOrCreateSavedConversation(ctx context.Context, actorID string) (string, error) {

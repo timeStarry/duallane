@@ -130,9 +130,50 @@ export function SettingsModal() {
   // Profile Nickname & Avatar editing state (A2)
   const avatarInputRef = useRef<HTMLInputElement | null>(null);
   const [nicknameDraftByUser, setNicknameDraftByUser] = useState<Record<string, string>>({});
-  const [profileBusy, setProfileBusy] = useState<"" | "nickname" | "avatar" | "deleteAvatar">("");
+  const [bioDraftByUser, setBioDraftByUser] = useState<Record<string, string>>({});
+  const [statusTextDraftByUser, setStatusTextDraftByUser] = useState<Record<string, string>>({});
+  const [profileBusy, setProfileBusy] = useState<"" | "nickname" | "bio" | "avatar" | "deleteAvatar">("");
   const [profileError, setProfileError] = useState("");
   const [profileFeedback, setProfileFeedback] = useState("");
+
+  const bioDraft = currentUser?.id
+    ? bioDraftByUser[currentUser.id] ?? (currentUser.bio || "")
+    : "";
+  const statusTextDraft = currentUser?.id
+    ? statusTextDraftByUser[currentUser.id] ?? (currentUser.statusText || "")
+    : "";
+
+  const handleSaveBioAndStatus = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!currentUser) return;
+    setProfileError("");
+    setProfileFeedback("");
+    setProfileBusy("bio");
+    try {
+      const currentPrefs = await apiV1.getPreferences().catch(() => ({}));
+      await apiV1.savePreferences({
+        ...currentPrefs,
+        bio: bioDraft.trim(),
+        statusText: statusTextDraft.trim(),
+      });
+      await useWorkspaceStore.getState().bootstrapWorkspace();
+      setBioDraftByUser((prev) => {
+        const next = { ...prev };
+        delete next[currentUser.id];
+        return next;
+      });
+      setStatusTextDraftByUser((prev) => {
+        const next = { ...prev };
+        delete next[currentUser.id];
+        return next;
+      });
+      setProfileFeedback("个人简介与状态已保存");
+    } catch (err) {
+      setProfileError(err instanceof Error ? err.message : "保存简介失败");
+    } finally {
+      setProfileBusy("");
+    }
+  };
 
   const activeUserId = currentUser?.id || "";
   const baseNickname = currentUser?.nickname || currentUser?.displayName || "";
@@ -818,6 +859,63 @@ export function SettingsModal() {
                           className="shrink-0"
                         >
                           保存昵称
+                        </Button>
+                      </div>
+                    </form>
+
+                    <form
+                      onSubmit={(e) => void handleSaveBioAndStatus(e)}
+                      className="space-y-2.5 border-t border-dl-border-hairline pt-3"
+                    >
+                      <div className="space-y-1">
+                        <label className="text-xs font-medium text-dl-text-secondary">
+                          当前状态（名片展示）
+                        </label>
+                        <Input
+                          value={statusTextDraft}
+                          onChange={(e) =>
+                            setStatusTextDraftByUser((prev) => ({
+                              ...prev,
+                              [currentUser.id]: e.target.value,
+                            }))
+                          }
+                          placeholder="例如：专注开发中 / 会议中 / 休假中"
+                          aria-label="当前状态"
+                          maxLength={48}
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-xs font-medium text-dl-text-secondary">
+                          个人简介
+                        </label>
+                        <textarea
+                          rows={2}
+                          value={bioDraft}
+                          onChange={(e) =>
+                            setBioDraftByUser((prev) => ({
+                              ...prev,
+                              [currentUser.id]: e.target.value,
+                            }))
+                          }
+                          placeholder="介绍一下自己，点击你头像的成员将看到这段简介…"
+                          aria-label="个人简介"
+                          maxLength={200}
+                          className="w-full resize-none rounded-xl border border-dl-border-hairline bg-dl-surface-subtle/40 px-3 py-2 text-xs text-dl-text-primary placeholder:text-dl-text-tertiary focus:border-dl-lane-shared focus:outline-none"
+                        />
+                      </div>
+                      <div className="flex justify-end">
+                        <Button
+                          type="submit"
+                          size="sm"
+                          variant="secondary"
+                          busy={profileBusy === "bio"}
+                          disabled={
+                            profileBusy !== "" ||
+                            (bioDraft.trim() === (currentUser.bio || "") &&
+                              statusTextDraft.trim() === (currentUser.statusText || ""))
+                          }
+                        >
+                          保存简介与状态
                         </Button>
                       </div>
                     </form>

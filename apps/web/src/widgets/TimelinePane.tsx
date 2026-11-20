@@ -7,6 +7,7 @@ import {
   Bookmark,
   Check,
   CheckCheck,
+  CheckSquare,
   ChevronLeft,
   ChevronRight,
   Clock,
@@ -29,11 +30,13 @@ import {
   Plus,
   Reply,
   RotateCcw,
+  Search,
   SendHorizontal,
   Settings2,
   ShieldCheck,
   Slash,
   Smile,
+  Square,
   UserCheck,
   Upload,
   X,
@@ -84,7 +87,6 @@ import {
   Popover,
   PopoverContent,
   PopoverTrigger,
-  Select,
   Tooltip,
 } from "@/shared/ui";
 import { DualLaneCardKit } from "@/widgets/DualLaneCardKit";
@@ -185,6 +187,10 @@ export function TimelinePane() {
     openDetailsInspector,
     openFileInspector,
     openLightbox,
+    openProfileModal,
+    openSearchInConversation,
+    pendingMention,
+    clearPendingMention,
   } = useLaneStore();
   const {
     isPreviewMode,
@@ -240,8 +246,17 @@ export function TimelinePane() {
   const [pinIndex, setPinIndex] = useState(0);
   const [copiedLink, setCopiedLink] = useState(false);
   const [forwardMsgId, setForwardMsgId] = useState<string | null>(null);
+  const [forwardMsgIds, setForwardMsgIds] = useState<string[]>([]);
+  const [forwardFilter, setForwardFilter] = useState("");
   const [forwardTargetConvId, setForwardTargetConvId] = useState<string>("");
   const [forwarding, setForwarding] = useState(false);
+  const [selectModeConvId, setSelectModeConvId] = useState<string | null>(null);
+  const [selectedMsgIds, setSelectedMsgIds] = useState<string[]>([]);
+  const [openReactionPickerMsgId, setOpenReactionPickerMsgId] = useState<string | null>(null);
+  const selectMode = Boolean(activeConversationId && selectModeConvId === activeConversationId);
+  const setSelectMode = (enabled: boolean) => {
+    setSelectModeConvId(enabled && activeConversationId ? activeConversationId : null);
+  };
   const [remarkModalTarget, setRemarkModalTarget] = useState<{
     userId: string;
     displayName: string;
@@ -269,7 +284,32 @@ export function TimelinePane() {
       }>
     >
   >({});
-  const [replyToId, setReplyToId] = useState<string | undefined>(undefined);
+  const [replyToByConv, setReplyToByConv] = useState<Record<string, string | undefined>>({});
+  const replyToId = activeConversationId
+    ? activeConversationId in replyToByConv
+      ? replyToByConv[activeConversationId]
+      : drafts[activeConversationId]?.replyToMessageId
+    : undefined;
+  const setReplyToId = useCallback(
+    (nextId: string | undefined) => {
+      if (!activeConversationId) return;
+      setReplyToByConv((prev) => ({ ...prev, [activeConversationId]: nextId }));
+    },
+    [activeConversationId]
+  );
+
+  // Consume @mention requests triggered from MemberProfileModal
+  useEffect(() => {
+    if (!pendingMention || !activeConversationId || pendingMention.conversationId !== activeConversationId) {
+      return;
+    }
+    const existing = useWorkspaceStore.getState().drafts[activeConversationId]?.text || "";
+    const mentionToken = `@${pendingMention.label} `;
+    const next = existing && !existing.endsWith(" ") ? `${existing} ${mentionToken}` : `${existing}${mentionToken}`;
+    setDraft(activeConversationId, next, replyToId);
+    clearPendingMention();
+    requestAnimationFrame(() => composerRef.current?.focus());
+  }, [activeConversationId, clearPendingMention, pendingMention, replyToId, setDraft]);
   const [pendingAttachmentsByConv, setPendingAttachmentsByConv] = useState<
     Record<string, V1MessageAttachment[]>
   >({});
@@ -1460,6 +1500,9 @@ export function TimelinePane() {
     setCursorPos(0);
     setPendingAttachmentsByConv((prev) => ({ ...prev, [convId]: [] }));
     setWorkspaceUploadErrorByConv((prev) => ({ ...prev, [convId]: "" }));
+    if (activeEntry) {
+      setDismissedUnreadRevision(activeEntry.revision);
+    }
     await sendWorkspaceMessage(convId, text, reply, attachmentsToSend);
   };
 
@@ -1468,12 +1511,18 @@ export function TimelinePane() {
     await submitCurrentMessage();
   };
 
+  const activeForwardIds = forwardMsgIds.length > 0 ? forwardMsgIds : forwardMsgId ? [forwardMsgId] : [];
+
   const handleForwardSubmit = async () => {
-    if (!forwardMsgId || !forwardTargetConvId) return;
+    if (activeForwardIds.length === 0 || !forwardTargetConvId) return;
     setForwarding(true);
     try {
-      await forwardMessage([forwardMsgId], forwardTargetConvId);
+      await forwardMessage(activeForwardIds, forwardTargetConvId);
       setForwardMsgId(null);
+      setForwardMsgIds([]);
+      setForwardFilter("");
+      setSelectMode(false);
+      setSelectedMsgIds([]);
     } finally {
       setForwarding(false);
     }
@@ -1721,6 +1770,18 @@ export function TimelinePane() {
               </Popover>
             );
           })()}
+
+          <Tooltip content="搜索本会话聊天记录 (Ctrl+F)" side="bottom">
+            <IconButton
+              size="sm"
+              variant="ghost"
+              aria-label="搜索本会话聊天记录"
+              label="搜索本会话聊天记录"
+              onClick={() => openSearchInConversation(activeConv.id)}
+            >
+              <Search className="size-4" strokeWidth={1.85} />
+            </IconButton>
+          </Tooltip>
 
           <Tooltip content={activeConv.kind === "group" ? "群聊设置" : "会话详情"} side="bottom">
             <Button
@@ -2078,11 +2139,22 @@ export function TimelinePane() {
 
                 <div
                   data-message-id={msg.id}
-                  onDoubleClick={triggerStartReply}
+                  onClick={
+                    selectMode && !msg.recalledAt
+                      ? () =>
+                          setSelectedMsgIds((prev) =>
+                            prev.includes(msg.id)
+                              ? prev.filter((id) => id !== msg.id)
+                              : [...prev, msg.id]
+                          )
+                      : undefined
+                  }
                   className={cn(
                     "group relative flex min-w-0 flex-col rounded-2xl px-1.5 py-0.5 transition-colors",
                     idx === 0 && !dateDividerLabel ? "mt-0" : groupedWithPrev ? "mt-0.5" : "mt-4",
                     isOwn ? "items-end" : "items-start",
+                    selectMode && !msg.recalledAt && "cursor-pointer",
+                    selectMode && selectedMsgIds.includes(msg.id) && "bg-dl-lane-shared/10 ring-1 ring-dl-lane-shared/35",
                     isHighlighted && "bg-dl-lane-shared/14 ring-1 ring-dl-lane-shared/40 py-1.5"
                   )}
                 >
@@ -2137,76 +2209,37 @@ export function TimelinePane() {
                             isOwn && "flex-row-reverse"
                           )}
                         >
+                          {selectMode && !msg.recalledAt && (
+                            <div className="shrink-0 self-center pr-1 text-dl-lane-shared">
+                              {selectedMsgIds.includes(msg.id) ? (
+                                <CheckSquare className="size-4" strokeWidth={2} />
+                              ) : (
+                                <Square className="size-4 text-dl-text-tertiary" strokeWidth={1.8} />
+                              )}
+                            </div>
+                          )}
                           {!isOwn &&
                             (!groupedWithPrev ? (
                               <div className="w-8 shrink-0 self-start pt-0.5 flex justify-center">
-                                {canSetSenderRemark ? (
-                                  <Popover>
-                                    <PopoverTrigger asChild>
-                                      <Button
-                                        type="button"
-                                        variant="ghost"
-                                        aria-label={`查看 ${msg.senderName} 资料或设置备注`}
-                                        className="h-auto w-auto rounded-full p-0 hover:bg-transparent"
-                                      >
-                                        <Avatar
-                                          name={msg.senderName}
-                                          src={senderAvatarSrc}
-                                          kind={senderAvatarKind}
-                                          color={senderMember?.avatarColor}
-                                          size="sm"
-                                        />
-                                      </Button>
-                                    </PopoverTrigger>
-                                    <PopoverContent side="right" align="start" className="w-56 p-3 space-y-2.5">
-                                      <div className="flex items-center gap-2.5 min-w-0">
-                                        <Avatar
-                                          name={msg.senderName}
-                                          src={senderAvatarSrc}
-                                          kind={senderAvatarKind}
-                                          color={senderMember?.avatarColor}
-                                          size="md"
-                                        />
-                                        <div className="min-w-0 flex-1">
-                                          <div className="truncate text-xs font-semibold text-dl-text-primary">
-                                            {msg.senderName}
-                                          </div>
-                                          {senderMember?.remark && senderMember?.nickname && (
-                                            <div className="truncate text-[11px] text-dl-text-tertiary">
-                                              原昵称：{senderMember.nickname}
-                                            </div>
-                                          )}
-                                          {senderMember?.handle && (
-                                            <div className="truncate text-[11px] text-dl-text-tertiary">
-                                              @{senderMember.handle}
-                                            </div>
-                                          )}
-                                        </div>
-                                      </div>
-                                      <div className="flex items-center gap-1.5 pt-1 border-t border-dl-border-hairline">
-                                        <Button
-                                          type="button"
-                                          size="sm"
-                                          variant="secondary"
-                                          className="h-7 flex-1 gap-1 text-xs"
-                                          onClick={() => insertMentionForAuthor(msg.senderName)}
-                                        >
-                                          <AtSign className="size-3" strokeWidth={2} />
-                                          提及
-                                        </Button>
-                                        <Button
-                                          type="button"
-                                          size="sm"
-                                          variant="primary"
-                                          className="h-7 flex-1 gap-1 text-xs"
-                                          onClick={triggerOpenSenderRemark}
-                                        >
-                                          <UserCheck className="size-3" strokeWidth={2} />
-                                          设置备注
-                                        </Button>
-                                      </div>
-                                    </PopoverContent>
-                                  </Popover>
+                                {msg.senderId ? (
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    aria-label={`查看 ${msg.senderName} 名片`}
+                                    className="h-auto w-auto rounded-full p-0 hover:bg-transparent hover:opacity-90"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      openProfileModal(msg.senderId);
+                                    }}
+                                  >
+                                    <Avatar
+                                      name={msg.senderName}
+                                      src={senderAvatarSrc}
+                                      kind={senderAvatarKind}
+                                      color={senderMember?.avatarColor}
+                                      size="sm"
+                                    />
+                                  </Button>
                                 ) : (
                                   <Avatar
                                     name={msg.senderName}
@@ -2649,23 +2682,33 @@ export function TimelinePane() {
                           {/* Reactions Row */}
                           {Object.keys(msg.reactions).length > 0 && (
                             <div className="mt-1.5 flex flex-wrap items-center gap-1 px-0.5">
-                              {Object.entries(msg.reactions).map(([emoji, info]) => (
-                                <Button
-                                  key={emoji}
-                                  size="sm"
-                                  variant="ghost"
-                                  onClick={() => void toggleReaction(activeConv.id, msg.id, emoji)}
-                                  className={cn(
-                                    "h-6 gap-1 rounded-full border px-2 text-[11px] tabular-nums",
-                                    info.reactedByMe
-                                      ? "border-dl-lane-shared/40 bg-dl-lane-shared/14 text-dl-lane-shared font-semibold"
-                                      : "border-dl-border-hairline bg-dl-surface-subtle/75 text-dl-text-secondary"
-                                  )}
-                                >
-                                  <ReactionKeyDisplay emoteKey={emoji} />
-                                  <span>{info.count}</span>
-                                </Button>
-                              ))}
+                              {Object.entries(msg.reactions).map(([emoji, info]) => {
+                                const reactorNames = (info.users || [])
+                                  .map((uid) => members[uid]?.displayName || (uid === currentUser?.id ? "我" : uid))
+                                  .filter(Boolean);
+                                const tooltipText =
+                                  reactorNames.length > 0
+                                    ? `${reactorNames.join("、")} 回应了此表情`
+                                    : `${info.count} 人回应了此表情`;
+                                return (
+                                  <Tooltip key={emoji} content={tooltipText} side="top">
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      onClick={() => void toggleReaction(activeConv.id, msg.id, emoji)}
+                                      className={cn(
+                                        "h-6 gap-1 rounded-full border px-2 text-[11px] tabular-nums",
+                                        info.reactedByMe
+                                          ? "border-dl-lane-shared/40 bg-dl-lane-shared/14 text-dl-lane-shared font-semibold"
+                                          : "border-dl-border-hairline bg-dl-surface-subtle/75 text-dl-text-secondary"
+                                      )}
+                                    >
+                                      <ReactionKeyDisplay emoteKey={emoji} />
+                                      <span>{info.count}</span>
+                                    </Button>
+                                  </Tooltip>
+                                );
+                              })}
                             </div>
                           )}
 
@@ -2753,6 +2796,15 @@ export function TimelinePane() {
                         >
                           {isCurrentlyCollapsed ? "展开内容" : "在本机折叠此消息"}
                         </ContextMenuItem>
+                        <ContextMenuItem
+                          icon={<CheckSquare className="size-4" strokeWidth={1.85} />}
+                          onSelect={() => {
+                            setSelectMode(true);
+                            setSelectedMsgIds([msg.id]);
+                          }}
+                        >
+                          多选转发
+                        </ContextMenuItem>
                         {canSetSenderRemark && (
                           <ContextMenuItem
                             icon={<UserCheck className="size-4" strokeWidth={1.85} />}
@@ -2816,7 +2868,10 @@ export function TimelinePane() {
                         "focus-within:opacity-100 focus-within:pointer-events-auto"
                       )}
                     >
-                      <Popover>
+                      <Popover
+                        open={openReactionPickerMsgId === msg.id}
+                        onOpenChange={(open) => setOpenReactionPickerMsgId(open ? msg.id : null)}
+                      >
                         <PopoverTrigger asChild>
                           <IconButton
                             size="sm"
@@ -2833,9 +2888,10 @@ export function TimelinePane() {
                           className="p-1.5"
                         >
                           <ReactionPickerPopoverContent
-                            onSelectReaction={(key) =>
-                              void toggleReaction(activeConv.id, msg.id, key)
-                            }
+                            onSelectReaction={(key) => {
+                              setOpenReactionPickerMsgId(null);
+                              void toggleReaction(activeConv.id, msg.id, key);
+                            }}
                           />
                         </PopoverContent>
                       </Popover>
@@ -2921,6 +2977,15 @@ export function TimelinePane() {
                             onSelect={() => toggleMessageCollapse(msg.id, isCurrentlyCollapsed)}
                           >
                             {isCurrentlyCollapsed ? "展开内容" : "在本机折叠此消息"}
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            icon={<CheckSquare className="size-4" strokeWidth={1.85} />}
+                            onSelect={() => {
+                              setSelectMode(true);
+                              setSelectedMsgIds([msg.id]);
+                            }}
+                          >
+                            多选转发
                           </DropdownMenuItem>
                           {canSetSenderRemark && (
                             <DropdownMenuItem
@@ -3543,30 +3608,106 @@ export function TimelinePane() {
         </form>
       </div>
 
+      {/* Multi-Select Action Bar */}
+      {selectMode && (
+        <div className="border-t border-dl-border-hairline bg-dl-surface-raised/90 px-4 py-2.5 flex items-center justify-between gap-3">
+          <span className="text-xs font-medium text-dl-text-primary tabular-nums">
+            已选择 {selectedMsgIds.length} 条消息
+          </span>
+          <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                setSelectMode(false);
+                setSelectedMsgIds([]);
+              }}
+            >
+              取消
+            </Button>
+            <Button
+              type="button"
+              variant="primary"
+              size="sm"
+              disabled={selectedMsgIds.length === 0}
+              className="gap-1.5"
+              onClick={() => {
+                setForwardMsgIds(selectedMsgIds);
+                setForwardTargetConvId("");
+                setForwardFilter("");
+              }}
+            >
+              <Forward className="size-3.5" />
+              逐条转发 ({selectedMsgIds.length})
+            </Button>
+          </div>
+        </div>
+      )}
+
       {/* Forward Dialog */}
       <Dialog
-        open={Boolean(forwardMsgId)}
+        open={activeForwardIds.length > 0}
         onOpenChange={(open) => {
-          if (!open) setForwardMsgId(null);
+          if (!open) {
+            setForwardMsgId(null);
+            setForwardMsgIds([]);
+            setForwardFilter("");
+          }
         }}
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>转发消息</DialogTitle>
+            <DialogTitle>
+              {activeForwardIds.length > 1
+                ? `转发 ${activeForwardIds.length} 条消息`
+                : "转发消息"}
+            </DialogTitle>
           </DialogHeader>
           <div className="space-y-3 p-6 max-narrow:p-4 pt-4">
-            <Select
-              label="选择转发目标对话"
-              value={forwardTargetConvId}
-              onValueChange={setForwardTargetConvId}
-              options={conversationOrder.map((id) => ({
-                value: id,
-                label: conversations[id]?.title || id,
-              }))}
-              placeholder="选择目标对话（含「我的收藏」）"
+            <Input
+              value={forwardFilter}
+              onChange={(e) => setForwardFilter(e.target.value)}
+              placeholder="搜索目标会话或群聊…"
+              aria-label="搜索转发目标会话"
             />
+            <div className="dl-scroll max-h-56 overflow-y-auto space-y-1 rounded-xl border border-dl-border-hairline p-1.5">
+              {conversationOrder
+                .map((id) => conversations[id])
+                .filter((c): c is NonNullable<typeof c> => Boolean(c))
+                .filter(
+                  (c) =>
+                    !forwardFilter.trim() ||
+                    c.title.toLowerCase().includes(forwardFilter.trim().toLowerCase())
+                )
+                .map((c) => {
+                  const selected = forwardTargetConvId === c.id;
+                  return (
+                    <Button
+                      key={c.id}
+                      type="button"
+                      variant={selected ? "secondary" : "ghost"}
+                      size="sm"
+                      className="w-full justify-between rounded-lg px-2.5 py-2 text-left"
+                      onClick={() => setForwardTargetConvId(c.id)}
+                    >
+                      <span className="truncate text-xs font-medium text-dl-text-primary">
+                        {c.title}
+                      </span>
+                      {selected && <Check className="size-3.5 shrink-0 text-dl-lane-shared" />}
+                    </Button>
+                  );
+                })}
+            </div>
             <div className="flex justify-end gap-2">
-              <Button variant="ghost" onClick={() => setForwardMsgId(null)}>
+              <Button
+                variant="ghost"
+                onClick={() => {
+                  setForwardMsgId(null);
+                  setForwardMsgIds([]);
+                  setForwardFilter("");
+                }}
+              >
                 取消
               </Button>
               <Button
