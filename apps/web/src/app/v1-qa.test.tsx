@@ -1081,7 +1081,6 @@ describe("DualLane v1.0 QA Acceptance Suite", () => {
       const wsLoginHtml = renderToStaticMarkup(<AppV1 />);
       expect(wsLoginHtml).toContain("登录后进入共享空间");
       expect(wsLoginHtml).toContain("使用 GitHub 登录共享空间");
-      expect(wsLoginHtml).toContain("邮箱验证码");
       expect(wsLoginHtml).toContain("返回选择");
     } finally {
       Object.assign(useWorkspaceStore.getInitialState(), prevWsInitial);

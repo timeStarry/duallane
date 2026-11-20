@@ -11,7 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"path"
 	"sort"
 	"strings"
@@ -83,7 +82,6 @@ type Repository interface {
 	UpsertAdminAnnouncement(ctx context.Context, actorID string, ann SystemAnnouncement, now time.Time) (SystemAnnouncement, error)
 	AckAnnouncement(ctx context.Context, actorID, announcementID string, now time.Time) error
 	FindBoundEmailOwner(ctx context.Context, normalizedEmail string) (string, error)
-	FindEmailLoginOwner(ctx context.Context, normalizedEmail string) (string, error)
 	CheckEmailChallengeCooldown(ctx context.Context, userID string, now time.Time) error
 	SaveEmailChallenge(ctx context.Context, challengeID, userID, normalizedEmail, codeHash string, now, expiresAt time.Time) error
 	VerifyAndConsumeEmailChallenge(ctx context.Context, challengeID string, verifyFn func(rec EmailChallengeStoreRecord) (bool, error), now time.Time) (EmailChallengeStoreRecord, error)
@@ -911,15 +909,18 @@ func (s *Service) SendLoginEmailCode(ctx context.Context, rawEmail string) (Emai
 	if err != nil {
 		return EmailChallengeSummary{}, fmt.Errorf("%w: 请输入有效的邮箱地址", ErrInvalidInput)
 	}
-	now := s.now()
-	challengeID := randomID("echl_login")
-	expiresAt := now.Add(email.EmailChallengeTTL)
-	summary := EmailChallengeSummary{
-		ChallengeID:        challengeID,
-		MaskedEmail:        email.MaskEmailAddress(normalized),
-		ExpiresAt:          expiresAt.UTC().Format(time.RFC3339),
-		ResendAfterSeconds: int(email.EmailChallengeResend / time.Second),
+	userID, err := s.repo.FindBoundEmailOwner(ctx, normalized)
+	if err != nil {
+		return EmailChallengeSummary{}, err
 	}
+	if userID == "" {
+		return EmailChallengeSummary{}, ErrEmailNotBound
+	}
+	now := s.now()
+	if err := s.repo.CheckEmailChallengeCooldown(ctx, userID, now); err != nil {
+		return EmailChallengeSummary{}, err
+	}
+	challengeID := randomID("echl_login")
 	code, err := s.codeGen()
 	if err != nil {
 		return EmailChallengeSummary{}, err
@@ -928,24 +929,19 @@ func (s *Service) SendLoginEmailCode(ctx context.Context, rawEmail string) (Emai
 	if err != nil {
 		return EmailChallengeSummary{}, err
 	}
-	userID, err := s.repo.FindEmailLoginOwner(ctx, normalized)
-	if err != nil {
-		return EmailChallengeSummary{}, err
-	}
-	// Use the same public response even when there is no eligible account.
-	if userID == "" {
-		return summary, nil
-	}
-	if err := s.repo.SaveEmailChallenge(ctx, challengeID, userID, normalized, codeHash, now, expiresAt); err != nil {
-		if errors.Is(err, ErrRateLimited) || errors.Is(err, ErrChallengeInvalid) {
-			return summary, nil
-		}
-		return EmailChallengeSummary{}, err
-	}
 	if err := s.emailSender.SendVerificationCode(ctx, normalized, code, "login"); err != nil {
-		slog.WarnContext(ctx, "Workspace login verification email delivery failed")
+		return EmailChallengeSummary{}, err
 	}
-	return summary, nil
+	expiresAt := now.Add(email.EmailChallengeTTL)
+	if err := s.repo.SaveEmailChallenge(ctx, challengeID, userID, normalized, codeHash, now, expiresAt); err != nil {
+		return EmailChallengeSummary{}, err
+	}
+	return EmailChallengeSummary{
+		ChallengeID:        challengeID,
+		MaskedEmail:        email.MaskEmailAddress(normalized),
+		ExpiresAt:          expiresAt.UTC().Format(time.RFC3339),
+		ResendAfterSeconds: int(email.EmailChallengeResend / time.Second),
+	}, nil
 }
 
 func (s *Service) VerifyLoginEmail(ctx context.Context, rawEmail, challengeID, code string) (V1BootstrapMember, error) {

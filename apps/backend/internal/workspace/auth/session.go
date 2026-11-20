@@ -53,10 +53,6 @@ type GitHubProfile struct {
 	Email     string
 	Name      string
 	AvatarURL string
-
-	// Only the authenticated provider email list sets this field. A successful
-	// lookup without an eligible address sets it to an empty string to clear it.
-	verifiedLoginEmail *string
 }
 
 type Session struct {

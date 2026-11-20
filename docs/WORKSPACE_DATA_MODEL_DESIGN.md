@@ -108,7 +108,6 @@ Fields:
 | `github_id` | Stable provider ID, nullable until seeded owner first login. |
 | `github_login` | Display and owner bootstrap matching. |
 | `email` | Used for seeded owner matching when available. |
-| `github_login_email` | Nullable verified primary address from the authenticated GitHub OAuth email list. Private to login resolution. |
 | `display_name` | Product display name. |
 | `avatar_url` | Optional avatar. |
 | `kind` | `human` or future `bot`. |

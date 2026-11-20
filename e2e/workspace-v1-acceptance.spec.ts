@@ -251,10 +251,6 @@ test.describe("DualLane v1.0 Shared Workspace Login, Search, File Transfer & 320
       await assertWorkspaceNoOverlapAtWidth(pageOwner, 1280, "1280px Minimalist Two-Card Home Portal");
       await pageOwner.getByTestId("home-card-workspace").click();
       await expect(pageOwner).toHaveURL(/\/workspace$/);
-      await pageOwner.getByRole("radio", { name: "邮箱验证码" }).click();
-      await expect(pageOwner.getByRole("textbox", { name: "登录邮箱" })).toBeVisible();
-      await expect(pageOwner.getByText(/GitHub 已验证的主邮箱/)).toBeVisible();
-      await pageOwner.getByRole("radio", { name: "GitHub 登录", exact: true }).click();
       await expect(pageOwner.getByRole("button", { name: "使用 GitHub 登录共享空间" })).toBeVisible();
       await pageOwner.getByRole("button", { name: "使用 GitHub 登录共享空间" }).click();
 

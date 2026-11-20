@@ -21,6 +21,7 @@ var (
 	ErrRateLimited       = errors.New("v1.rate_limited")
 	ErrProactiveDeny     = errors.New("v1.proactive_disabled")
 	ErrEmailAlreadyBound = errors.New("v1.email_already_bound")
+	ErrEmailNotBound     = errors.New("v1.email_not_bound")
 	ErrChallengeInvalid  = errors.New("v1.challenge_invalid")
 )
 
