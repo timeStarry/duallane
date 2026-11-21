@@ -50,6 +50,35 @@ try {
     const timeline = page.getByTestId("workspace-timeline-scroll");
     const bottomDistance = () => timeline.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight);
     await expect.poll(bottomDistance).toBeLessThan(3);
+
+    // A typing bar can resize the viewport while the new reply is being acknowledged.
+    const clockStart = new Date("2026-11-17T06:02:00Z");
+    await page.clock.install({ time: clockStart });
+    await page.clock.pauseAt(new Date(clockStart.getTime() + 1000));
+    await page.evaluate(() => window.chatFixture.append("visible-reply", {
+      authorId: "test-bot", authorName: "验收机器人", authorKind: "bot", kind: "bot",
+      replyToMessageId: "message-79", createdAt: "2026-11-17T06:00:30Z",
+    }));
+    const visibleReply = timeline.locator('[data-message-id="visible-reply"]');
+    await expect(visibleReply).toBeInViewport({ ratio: 1 });
+    if (width === 1280) await expect(page.getByTestId("unread-badge")).toHaveText("1");
+    await page.evaluate(() => window.chatFixture.ws.getState().applyRealtimeEvent({
+      type: "conversation.typing", conversationId: "chat-a",
+      payload: { userId: "member-2", displayName: "成员02", expiresAt: new Date(Date.now() + 600).toISOString() },
+    }));
+    const typingBar = page.getByTestId("timeline-typing-bar");
+    await expect(typingBar).toBeVisible();
+    await page.clock.runFor(1200);
+    await expect(typingBar).toHaveCount(0);
+    await expect(visibleReply).toBeInViewport({ ratio: 1 });
+    await page.clock.runFor(200);
+    await expect.poll(() => page.evaluate(() => {
+      const { lastReadMessageId, unreadCount } = window.chatFixture.ws.getState().conversations["chat-a"];
+      return [lastReadMessageId, unreadCount];
+    })).toEqual(["visible-reply", 0]);
+    if (width === 1280) await expect(page.getByTestId("unread-badge")).toHaveCount(0);
+    await page.clock.resume();
+
     const composer = page.getByRole("combobox");
     await composer.fill("@");
     const menu = page.getByTestId("mention-autocomplete-popover");

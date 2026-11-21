@@ -137,6 +137,9 @@ Client behavior:
 
 - After the latest page renders, submit the last displayed message ID when the
   current conversation is in the foreground and at its latest position.
+- Recheck the visible end when the message content or the timeline viewport
+  resizes. A typing indicator or composer resize can move the bottom without
+  a scroll event.
 - Coalesce pending mark-read calls and keep unread badges until confirmation.
 - Entries via search or history retain the reading position. The new-message
   divider uses the entry snapshot's first unread ID and does not count newly
