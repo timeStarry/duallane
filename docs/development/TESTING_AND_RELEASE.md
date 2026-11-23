@@ -2,6 +2,9 @@
 
 ## 1. Validation Matrix
 
+The external Comet workflow uses the same repository validation and guarded
+release policies. See the [Comet release operator guide](../../tools/release-agent/README.md).
+
 Run focused tests while iterating, then the complete gate for the highest-risk
 part of the change.
 
