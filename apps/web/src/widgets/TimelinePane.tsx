@@ -331,13 +331,22 @@ export function TimelinePane() {
   const [typingClockTick, setTypingClockTick] = useState(0);
   const [foreground, setForeground] = useState(isForegroundDocument);
   const [dismissedUnreadRevision, setDismissedUnreadRevision] = useState<number | null>(null);
+  const [consumedUnreadRevision, setConsumedUnreadRevision] = useState<number | null>(null);
   const [returnUnread, setReturnUnread] = useState<(ReturnType<typeof resolveReturnUnread> & { revision: number }) | null>(null);
+  const [seenIncomingState, setSeenIncomingState] = useState<{
+    revision: number | undefined;
+    ids: ReadonlySet<string>;
+  }>({ revision: undefined, ids: new Set() });
   const [compactViewport, setCompactViewport] = useState(() => typeof window !== "undefined" && Boolean(window.matchMedia?.("(max-width: 760px)").matches));
   const chatVisible = activeLane === "workspace" && entryView === "workspace" && (!compactViewport || mobileView === "chat");
   const canReadTimeline = chatVisible && foreground && !(compactViewport && inspectorOpen) && !settingsOpen &&
     !adminConsoleOpen && !searchOpen && !lightboxOpen;
   const entryRevisionRef = useRef<number | undefined>(undefined);
-  const seenIncomingIdsRef = useRef(new Set<string>());
+  const readCandidateRef = useRef<{
+    conversationId: string;
+    tailId: string;
+    anchorId: string;
+  } | null>(null);
   const programmaticScrollLockUntilRef = useRef(0);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const timelineContentRef = useRef<HTMLDivElement | null>(null);
@@ -368,13 +377,41 @@ export function TimelinePane() {
     [rawMessages]
   );
   const liveIncomingIds = activeConversationId ? liveIncomingIdsByConv[activeConversationId] || EMPTY_INCOMING_IDS : EMPTY_INCOMING_IDS;
-  const unseenIncomingIds = new Set(liveIncomingIds.filter((id) => !seenIncomingIdsRef.current.has(id)));
+  const activeSeenIds =
+    seenIncomingState.revision === activeEntry?.revision ? seenIncomingState.ids : undefined;
+  const unseenIncomingIds = new Set(
+    liveIncomingIds.filter((id) => !(activeSeenIds?.has(id) ?? false))
+  );
   const liveUnreadBelow = messages.filter((message) => unseenIncomingIds.has(message.id) &&
     (message.creationSeq ?? Infinity) > (activeConv?.lastReadSeq ?? -1) && unreadMessage(message, currentUser?.id));
   const unreadBelowCount = liveUnreadBelow.length;
-  const activeReturnUnread = returnUnread?.revision === activeEntry?.revision ? returnUnread : null;
+  const entryNavigationConsumed =
+    activeEntry?.revision !== undefined && consumedUnreadRevision === activeEntry.revision;
+  const activeReturnUnread =
+    !entryNavigationConsumed && returnUnread?.revision === activeEntry?.revision ? returnUnread : null;
   const returnBoundaryId = activeReturnUnread?.targetId;
   const unreadBoundaryId = returnBoundaryId || (!isNearBottom ? liveUnreadBelow[0]?.id : undefined);
+
+  const recordSeenIncoming = useCallback(
+    (revision: number | undefined, ids: readonly string[]) => {
+      if (revision === undefined || ids.length === 0) return;
+      setSeenIncomingState((prev) => {
+        const base = prev.revision === revision ? prev.ids : new Set<string>();
+        let changed = prev.revision !== revision;
+        for (const id of ids) {
+          if (!base.has(id)) {
+            changed = true;
+            break;
+          }
+        }
+        if (!changed) return prev;
+        const next = new Set(base);
+        for (const id of ids) next.add(id);
+        return { revision, ids: next };
+      });
+    },
+    []
+  );
   const unreadBoundaryLabel = returnBoundaryId && !activeReturnUnread?.exact ? "当前可回看的新消息" : "以下为新消息";
   const returnWindowDetail = activeEntry?.history === "failed" ? "暂无法定位"
     : activeEntry && activeReturnUnread && activeReturnUnread.availableCount < activeEntry.unreadCount
@@ -685,7 +722,7 @@ export function TimelinePane() {
 
     if (switchedConv) {
       entryRevisionRef.current = revision;
-      seenIncomingIdsRef.current = new Set(activeEntry?.incomingAtEntry);
+      setSeenIncomingState({ revision, ids: new Set(activeEntry?.incomingAtEntry || []) });
       latestMessageRef.current = messages.at(-1);
       isNearBottomRef.current = true;
       setIsNearBottom(true);
@@ -715,7 +752,7 @@ export function TimelinePane() {
   }, [activeConversationId, activeEntry, chatVisible, connectionStatus, highlightedMessageId, messages]);
 
   useIsomorphicLayoutEffect(() => {
-    if (!chatVisible || highlightedMessageId || !activeEntry?.unreadCount || activeEntry.history !== "ready") return;
+    if (!chatVisible || highlightedMessageId || !activeEntry?.unreadCount || activeEntry.history !== "ready" || entryNavigationConsumed) return;
     if (activeReturnUnread?.targetId && messages.some((message) => message.id === activeReturnUnread.targetId && unreadMessage(message, currentUser?.id))) return;
     const incomingAtEntry = new Set(activeEntry.incomingAtEntry);
     const laterIncomingIds = new Set(liveIncomingIds.filter((id) => !incomingAtEntry.has(id)));
@@ -723,7 +760,7 @@ export function TimelinePane() {
     if (!activeReturnUnread || activeReturnUnread.targetId !== window.targetId) {
       setReturnUnread({ ...window, revision: activeEntry.revision });
     }
-  }, [activeEntry, activeReturnUnread, chatVisible, currentUser?.id, highlightedMessageId, liveIncomingIds, messages, rawMessages]);
+  }, [activeEntry, activeReturnUnread, chatVisible, currentUser?.id, entryNavigationConsumed, highlightedMessageId, liveIncomingIds, messages, rawMessages]);
 
   // Follow the live tail if already there, or after an explicit local send.
   // Historical loads and message edits never contribute to the counter.
@@ -739,36 +776,90 @@ export function TimelinePane() {
       if (scrollRef.current && !highlightedMessageId) {
         scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
       }
-      if (canReadTimeline && !highlightedMessageId && activeEntry?.history === "ready") {
-        seenIncomingIdsRef.current = new Set(liveIncomingIds);
+      if (
+        canReadTimeline &&
+        !highlightedMessageId &&
+        activeEntry?.history === "ready" &&
+        scrollRef.current &&
+        atTimelineBottom(scrollRef.current)
+      ) {
+        recordSeenIncoming(activeEntry.revision, liveIncomingIds);
       }
     }
-  }, [activeConversationId, activeEntry?.history, canReadTimeline, chatVisible, currentUser?.id, highlightedMessageId, liveIncomingIds, messages, unreadBoundaryId]);
+  }, [activeConversationId, activeEntry?.history, activeEntry?.revision, canReadTimeline, chatVisible, currentUser?.id, highlightedMessageId, liveIncomingIds, messages, recordSeenIncoming, unreadBoundaryId]);
 
-  useEffect(() => {
-    if (!canReadTimeline || !isNearBottom || highlightedMessageId || connectionStatus !== "connected" ||
-      !activeConv?.unreadCount || activeEntry?.history !== "ready") return;
+  const readAnchorInfo = useMemo(() => {
+    if (!activeConv) return null;
     const visibleWindow = messages.filter(isReadAnchor);
     const tail = visibleWindow.at(-1);
-    if (!tail) return;
+    if (!tail) return null;
     // A late commit may have been placed earlier by its display timestamp.
     const anchor = visibleWindow.reduce((latest, message) =>
       (message.creationSeq ?? -1) > (latest.creationSeq ?? -1) ? message : latest, tail);
-    if (anchor.id === activeConv.lastReadMessageId) return;
+    const seqAdvances =
+      anchor.creationSeq !== undefined && activeConv.lastReadSeq !== undefined
+        ? anchor.creationSeq > activeConv.lastReadSeq
+        : false;
+    const needsAdvance =
+      seqAdvances || (activeConv.unreadCount > 0 && anchor.id !== activeConv.lastReadMessageId);
+    if (!needsAdvance) return null;
+    return {
+      conversationId: activeConv.id,
+      tailId: tail.id,
+      anchorId: anchor.id,
+    };
+  }, [activeConv, messages]);
+
+  useEffect(() => {
+    readCandidateRef.current = readAnchorInfo;
+  }, [readAnchorInfo]);
+
+  const needsReadAdvance = Boolean(readAnchorInfo);
+
+  useEffect(() => {
+    if (
+      !canReadTimeline ||
+      !isNearBottom ||
+      highlightedMessageId ||
+      connectionStatus !== "connected" ||
+      !needsReadAdvance ||
+      activeEntry?.history !== "ready"
+    ) {
+      return;
+    }
     const timer = window.setTimeout(() => {
+      const candidate = readCandidateRef.current;
       const timeline = scrollRef.current;
-      const row = timeline?.querySelector(`[data-message-id="${CSS.escape(tail.id)}"]`);
-      if (!isForegroundDocument() || !navigator.onLine || !timeline?.clientHeight ||
-        timeline.closest('[inert], [aria-hidden="true"]') || !atTimelineBottom(timeline) || !row) return;
+      if (!candidate || !timeline) return;
+      const row = timeline.querySelector(`[data-message-id="${CSS.escape(candidate.tailId)}"]`);
+      if (
+        !isForegroundDocument() ||
+        !navigator.onLine ||
+        !timeline.clientHeight ||
+        timeline.closest('[inert], [aria-hidden="true"]') ||
+        !atTimelineBottom(timeline) ||
+        !row
+      ) {
+        return;
+      }
       const viewport = timeline.getBoundingClientRect();
       const bounds = row.getBoundingClientRect();
       if (bounds.top < viewport.bottom && bounds.bottom > viewport.top) {
-        void markVisibleConversationRead(activeConv.id, anchor.id);
+        void markVisibleConversationRead(candidate.conversationId, candidate.anchorId);
       }
     }, 180);
     return () => window.clearTimeout(timer);
-  }, [activeConv, activeEntry?.history, canReadTimeline, connectionStatus, highlightedMessageId, isNearBottom,
-    markVisibleConversationRead, messages]);
+  }, [
+    activeConversationId,
+    activeEntry?.history,
+    activeEntry?.revision,
+    canReadTimeline,
+    connectionStatus,
+    highlightedMessageId,
+    isNearBottom,
+    markVisibleConversationRead,
+    needsReadAdvance,
+  ]);
 
   // Observe inner content height shifts (images, stickers, code blocks, cards) to stay locked at bottom
   const hasWorkspaceMessages = messages.length > 0;
@@ -1480,7 +1571,7 @@ export function TimelinePane() {
     }
     isNearBottomRef.current = true;
     setIsNearBottom(true);
-    if (canReadTimeline) seenIncomingIdsRef.current = new Set(liveIncomingIds);
+    if (canReadTimeline) recordSeenIncoming(activeEntry?.revision, liveIncomingIds);
   };
 
   const submitCurrentMessage = async () => {
@@ -1501,7 +1592,9 @@ export function TimelinePane() {
     setPendingAttachmentsByConv((prev) => ({ ...prev, [convId]: [] }));
     setWorkspaceUploadErrorByConv((prev) => ({ ...prev, [convId]: "" }));
     if (activeEntry) {
+      setConsumedUnreadRevision(activeEntry.revision);
       setDismissedUnreadRevision(activeEntry.revision);
+      recordSeenIncoming(activeEntry.revision, liveIncomingIds);
     }
     await sendWorkspaceMessage(convId, text, reply, attachmentsToSend);
   };
@@ -1899,7 +1992,7 @@ export function TimelinePane() {
           if (Date.now() >= programmaticScrollLockUntilRef.current || !near) {
             isNearBottomRef.current = near;
             setIsNearBottom(near);
-            if (near && canReadTimeline) seenIncomingIdsRef.current = new Set(liveIncomingIds);
+            if (near && canReadTimeline) recordSeenIncoming(activeEntry?.revision, liveIncomingIds);
           }
           if (
             el.scrollTop < 120 &&

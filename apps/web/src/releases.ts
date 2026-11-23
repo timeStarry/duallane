@@ -13,6 +13,21 @@ export type DualLaneRelease = {
 
 export const DUAL_LANE_RELEASES: DualLaneRelease[] = [
   {
+    version: "1.2.8",
+    releasedAt: "2026-11-23",
+    title: "修复已读会话残留未读数与误显新消息提示",
+    summary: "修复处于会话底部或已回复消息后仍残留未读计数，以及轻微上滑时误显旧的「以下为新消息」与底部未读角标的问题。",
+    categories: [
+      {
+        title: "消息已读与导航",
+        items: [
+          "优化底部自动已读调度，避免高频事件打断已读确认并在发送或浏览后及时推进已读游标",
+          "在当前会话主动发送回复后自动消隐旧的「以下为新消息」分割线，并实时同步已浏览消息计数"
+        ]
+      }
+    ]
+  },
+  {
     version: "1.2.7",
     releasedAt: "2026-11-21",
     title: "双端聊天体验全面升级",

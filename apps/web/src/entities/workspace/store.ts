@@ -2722,11 +2722,16 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
     markVisibleConversationRead: async (conversationId, messageId) => {
       const initial = get();
       const conversation = initial.conversations[conversationId];
-      if (!initial.currentUser || initial.activeConversationId !== conversationId || !conversation?.unreadCount ||
+      if (!initial.currentUser || initial.activeConversationId !== conversationId || !conversation ||
         initial.conversationEntry?.conversationId !== conversationId || initial.conversationEntry.history !== "ready" ||
-        initial.connectionStatus !== "connected" || conversation.lastReadMessageId === messageId) return;
+        initial.connectionStatus !== "connected") return;
       const message = initial.messagesByConv[conversationId]?.find((item) => item.id === messageId);
       if (!message || !isReadAnchor(message)) return;
+      const alreadyAtOrBeyond =
+        message.creationSeq !== undefined && conversation.lastReadSeq !== undefined
+          ? message.creationSeq <= conversation.lastReadSeq && conversation.unreadCount === 0
+          : conversation.lastReadMessageId === messageId && conversation.unreadCount === 0;
+      if (alreadyAtOrBeyond) return;
 
       const existingReq = readRequests.get(conversationId);
       if (existingReq) {
@@ -2744,7 +2749,10 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
           : await apiV1.markConversationRead(conversationId, messageId);
         succeeded = true;
         if (get().currentUser?.id === initial.currentUser.id && readRequests.get(conversationId)?.token === token) {
-          applyReadProjection(conversationId, { lastReadMessageId: messageId, ...receipt });
+          applyReadProjection(
+            conversationId,
+            receipt.lastReadMessageId !== undefined ? receipt : { lastReadMessageId: messageId, ...receipt }
+          );
         }
       } catch {
         // Schedule one bounded retry if still on this conversation with unread messages.
